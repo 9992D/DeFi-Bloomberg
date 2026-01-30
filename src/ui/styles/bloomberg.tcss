@@ -1,0 +1,332 @@
+/* Bloomberg Terminal Style Theme for Morpho Tracker */
+
+/* Base colors - Bloomberg palette */
+$background: #000000;
+$surface: #0a0a0a;
+$surface-elevated: #1a1a1a;
+$primary: #ff8c00;       /* Bloomberg orange */
+$secondary: #00d4ff;     /* Cyan accent */
+$positive: #00ff00;      /* Green for positive */
+$negative: #ff4444;      /* Red for negative */
+$neutral: #888888;       /* Gray for neutral */
+$text: #ffffff;
+$text-muted: #888888;
+$border: #333333;
+$border-highlight: #ff8c00;
+
+/* Root screen */
+Screen {
+    background: $background;
+    color: $text;
+}
+
+/* Header bar */
+#header {
+    dock: top;
+    height: 3;
+    background: $surface;
+    border-bottom: solid $border;
+    padding: 0 1;
+}
+
+#header-title {
+    text-style: bold;
+    color: $primary;
+    width: auto;
+}
+
+#header-time {
+    dock: right;
+    width: auto;
+    color: $text-muted;
+}
+
+/* Status bar */
+#status-bar {
+    dock: bottom;
+    height: 1;
+    background: $surface;
+    border-top: solid $border;
+    padding: 0 1;
+}
+
+#status-text {
+    color: $text-muted;
+}
+
+#status-refresh {
+    dock: right;
+    color: $secondary;
+}
+
+/* Main content area */
+#main-container {
+    layout: horizontal;
+}
+
+/* Left panel - Market list */
+#market-panel {
+    width: 60%;
+    height: 100%;
+    border-right: solid $border;
+}
+
+#market-panel-header {
+    dock: top;
+    height: 3;
+    background: $surface;
+    padding: 0 1;
+    border-bottom: solid $border;
+}
+
+#market-panel-title {
+    text-style: bold;
+    color: $primary;
+}
+
+/* Right panel - KPIs */
+#kpi-panel {
+    width: 40%;
+    height: 100%;
+}
+
+#kpi-panel-header {
+    dock: top;
+    height: 3;
+    background: $surface;
+    padding: 0 1;
+    border-bottom: solid $border;
+}
+
+#kpi-panel-title {
+    text-style: bold;
+    color: $primary;
+}
+
+/* DataTable styling */
+DataTable {
+    background: $background;
+    scrollbar-background: $surface;
+    scrollbar-color: $border;
+    scrollbar-color-hover: $primary;
+    scrollbar-color-active: $primary;
+}
+
+DataTable > .datatable--header {
+    background: $surface;
+    color: $primary;
+    text-style: bold;
+}
+
+DataTable > .datatable--cursor {
+    background: $surface-elevated;
+    color: $text;
+}
+
+DataTable > .datatable--hover {
+    background: $surface;
+}
+
+DataTable:focus > .datatable--cursor {
+    background: $border-highlight;
+}
+
+/* Cell colors for values */
+.positive {
+    color: $positive;
+}
+
+.negative {
+    color: $negative;
+}
+
+.neutral {
+    color: $neutral;
+}
+
+.highlight {
+    color: $primary;
+    text-style: bold;
+}
+
+/* KPI display widgets */
+.kpi-container {
+    height: auto;
+    padding: 1;
+    background: $surface;
+    margin: 1;
+    border: solid $border;
+}
+
+.kpi-label {
+    color: $text-muted;
+    text-style: italic;
+}
+
+.kpi-value {
+    color: $text;
+    text-style: bold;
+}
+
+.kpi-value-positive {
+    color: $positive;
+    text-style: bold;
+}
+
+.kpi-value-negative {
+    color: $negative;
+    text-style: bold;
+}
+
+/* Sparkline container */
+.sparkline-container {
+    height: 5;
+    margin: 1;
+    background: $surface;
+    border: solid $border;
+}
+
+/* Loading indicator */
+#loading {
+    dock: top;
+    height: 1;
+    background: $surface;
+    color: $secondary;
+    text-align: center;
+}
+
+LoadingIndicator {
+    background: $background;
+    color: $primary;
+}
+
+/* Footer/Help bar */
+#footer {
+    dock: bottom;
+    height: 1;
+    background: $surface;
+    color: $text-muted;
+    border-top: solid $border;
+}
+
+.footer-key {
+    color: $primary;
+    text-style: bold;
+}
+
+.footer-desc {
+    color: $text-muted;
+}
+
+/* Modal dialogs */
+.modal-dialog {
+    background: $surface-elevated;
+    border: solid $primary;
+    padding: 1 2;
+}
+
+.modal-title {
+    color: $primary;
+    text-style: bold;
+    text-align: center;
+    margin-bottom: 1;
+}
+
+/* Tabs */
+Tabs {
+    background: $surface;
+    border-bottom: solid $border;
+}
+
+Tab {
+    background: $surface;
+    color: $text-muted;
+    padding: 0 2;
+}
+
+Tab:hover {
+    background: $surface-elevated;
+    color: $text;
+}
+
+Tab.-active {
+    background: $background;
+    color: $primary;
+    text-style: bold;
+    border-bottom: solid $primary;
+}
+
+/* Input fields */
+Input {
+    background: $surface;
+    border: solid $border;
+    color: $text;
+}
+
+Input:focus {
+    border: solid $primary;
+}
+
+/* Buttons */
+Button {
+    background: $surface;
+    color: $text;
+    border: solid $border;
+}
+
+Button:hover {
+    background: $surface-elevated;
+    border: solid $primary;
+}
+
+Button:focus {
+    background: $primary;
+    color: $background;
+}
+
+/* Vertical scroll */
+VerticalScroll {
+    scrollbar-background: $surface;
+    scrollbar-color: $border;
+    scrollbar-color-hover: $primary;
+}
+
+/* Placeholder for empty states */
+.empty-state {
+    color: $text-muted;
+    text-align: center;
+    padding: 2;
+}
+
+/* Market detail view */
+#market-detail {
+    padding: 1;
+}
+
+.detail-section {
+    margin-bottom: 1;
+    padding: 1;
+    background: $surface;
+    border: solid $border;
+}
+
+.detail-title {
+    color: $primary;
+    text-style: bold;
+    margin-bottom: 1;
+}
+
+.detail-row {
+    layout: horizontal;
+}
+
+.detail-label {
+    width: 50%;
+    color: $text-muted;
+}
+
+.detail-value {
+    width: 50%;
+    color: $text;
+    text-align: right;
+}
