@@ -367,9 +367,11 @@ class MarketsScreen(Widget):
     def action_show_history(self) -> None:
         """Open the historical data screen for the selected market."""
         if self._selected_market is None:
+            self.notify("Select a market first", severity="warning")
             return
 
         if not self.settings.alchemy_rpc_url:
+            self.notify("Alchemy API key required for historical data", severity="warning")
             return
 
         self.app.push_screen(HistoricalScreen(self._selected_market))

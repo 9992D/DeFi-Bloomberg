@@ -494,6 +494,7 @@ class VaultsScreen(Widget):
     def action_show_history(self) -> None:
         """Open the historical data screen for the selected vault."""
         if self._selected_vault is None:
+            self.notify("Select a vault first", severity="warning")
             return
 
         self.app.push_screen(VaultHistoricalScreen(self._selected_vault))

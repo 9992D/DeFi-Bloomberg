@@ -3,7 +3,8 @@
 from decimal import Decimal
 from typing import Tuple, List
 
-from src.core.constants import IRM_PARAMS, SECONDS_PER_YEAR
+from src.core.constants.generic import SECONDS_PER_YEAR
+from src.protocols.morpho.config import IRM_PARAMS
 
 
 class AdaptiveCurveIRM:

@@ -1,6 +1,12 @@
-"""Morpho GraphQL API client."""
+"""Morpho GraphQL API client.
+
+DEPRECATED: This module is kept for backward compatibility.
+Use src.data.clients.morpho.client.MorphoClient instead, which implements
+the ProtocolClient interface for unified multi-protocol support.
+"""
 
 import logging
+import warnings
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import List, Optional, Dict, Any
@@ -27,9 +33,18 @@ logger = logging.getLogger(__name__)
 
 
 class MorphoAPIClient:
-    """GraphQL client for Morpho Blue API."""
+    """GraphQL client for Morpho Blue API.
+
+    DEPRECATED: Use MorphoClient from src.data.clients.morpho instead.
+    """
 
     def __init__(self, settings: Optional[Settings] = None):
+        warnings.warn(
+            "MorphoAPIClient is deprecated. Use MorphoClient from "
+            "src.data.clients.morpho instead.",
+            DeprecationWarning,
+            stacklevel=2
+        )
         self.settings = settings or get_settings()
         self._rate_limiter = AsyncLimiter(
             MORPHO_API_RATE_LIMIT, MORPHO_API_RATE_WINDOW

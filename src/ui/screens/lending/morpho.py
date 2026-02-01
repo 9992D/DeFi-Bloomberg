@@ -1,44 +1,37 @@
-"""Morpho protocol screen containing Markets and Vaults tabs.
-
-DEPRECATED: This module is kept for backward compatibility.
-Use src.ui.screens.lending.morpho.MorphoLendingScreen instead.
-"""
+"""Morpho protocol screen for Lending & Borrowing category."""
 
 import logging
-import warnings
 from typing import Optional
 
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.widget import Widget
-from textual.widgets import Static, TabbedContent, TabPane, DataTable
+from textual.widgets import TabbedContent, TabPane, DataTable
 
 from config.settings import Settings
 from src.data.pipeline import DataPipeline
+from src.data.clients.base import ProtocolType
+from src.ui.screens.lending.base import LendingProtocolScreen
 from src.ui.screens.markets import MarketsScreen
 from src.ui.screens.vaults import VaultsScreen
 
 logger = logging.getLogger(__name__)
 
 
-class MorphoScreen(Widget):
-    """Morpho protocol screen with Markets and Vaults tabs.
-
-    DEPRECATED: Use MorphoLendingScreen from src.ui.screens.lending.morpho instead.
-    """
+class MorphoLendingScreen(LendingProtocolScreen):
+    """Morpho protocol screen with Markets and Vaults tabs."""
 
     DEFAULT_CSS = """
-    MorphoScreen {
+    MorphoLendingScreen {
         height: 100%;
         width: 100%;
     }
-    MorphoScreen > TabbedContent {
+    MorphoLendingScreen > TabbedContent {
         height: 100%;
     }
-    MorphoScreen TabPane {
+    MorphoLendingScreen TabPane {
         height: 100%;
     }
-    MorphoScreen ContentSwitcher {
+    MorphoLendingScreen ContentSwitcher {
         height: 100%;
     }
     """
@@ -55,16 +48,15 @@ class MorphoScreen(Widget):
         *args,
         **kwargs
     ):
-        warnings.warn(
-            "MorphoScreen is deprecated. Use MorphoLendingScreen from "
-            "src.ui.screens.lending.morpho instead.",
-            DeprecationWarning,
-            stacklevel=2
-        )
-        super().__init__(*args, **kwargs)
-        self.pipeline = pipeline
-        self.settings = settings
-        self._initialized = False
+        super().__init__(pipeline, settings, *args, **kwargs)
+
+    @property
+    def protocol_type(self) -> ProtocolType:
+        return ProtocolType.MORPHO
+
+    @property
+    def protocol_name(self) -> str:
+        return "Morpho Blue"
 
     def compose(self) -> ComposeResult:
         with TabbedContent(initial="morpho-markets", id="morpho-tabs"):
