@@ -11,6 +11,16 @@ from .allocation import (
     AllocationMetrics,
     MarketAllocation,
 )
+from .rebalancing import (
+    RebalancingConfig,
+    RebalancingTrigger,
+    MarketDebtInfo,
+    DebtPosition,
+    RebalancingOpportunity,
+    RebalancingSnapshot,
+    RebalancingMetrics,
+    RebalancingResult,
+)
 
 __all__ = [
     "SimulatedPosition",
@@ -26,4 +36,13 @@ __all__ = [
     "AllocationSnapshot",
     "AllocationMetrics",
     "MarketAllocation",
+    # Rebalancing models
+    "RebalancingConfig",
+    "RebalancingTrigger",
+    "MarketDebtInfo",
+    "DebtPosition",
+    "RebalancingOpportunity",
+    "RebalancingSnapshot",
+    "RebalancingMetrics",
+    "RebalancingResult",
 ]

@@ -5,6 +5,8 @@ from .vault_historical import VaultHistoricalScreen
 from .markets import MarketsScreen
 from .vaults import VaultsScreen
 from .morpho import MorphoScreen
+from .sandbox import SandboxScreen
+from .debt_optimizer import DebtOptimizerScreen
 
 __all__ = [
     "HistoricalScreen",
@@ -12,4 +14,6 @@ __all__ = [
     "MarketsScreen",
     "VaultsScreen",
     "MorphoScreen",
+    "SandboxScreen",
+    "DebtOptimizerScreen",
 ]

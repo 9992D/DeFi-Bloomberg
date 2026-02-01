@@ -17,6 +17,8 @@ from textual.widgets import (
     Select,
     Label,
     Sparkline,
+    TabbedContent,
+    TabPane,
 )
 from textual.reactive import reactive
 
@@ -26,21 +28,75 @@ from src.sandbox.data import DataAggregator
 from src.sandbox.engine import AllocationSimulator
 from src.sandbox.models import AllocationConfig, AllocationStrategy, AllocationResult
 from src.core.models import Market
+from src.ui.screens.debt_optimizer import DebtOptimizerScreen
 
 logger = logging.getLogger(__name__)
 
 
 class SandboxScreen(Widget):
-    """Vault allocation sandbox for simulation."""
+    """Sandbox with tabbed interface for allocation and debt optimization."""
 
     DEFAULT_CSS = """
     SandboxScreen {
         height: 100%;
         width: 100%;
+    }
+
+    #sandbox-tabs {
+        height: 100%;
+        width: 100%;
+    }
+
+    TabbedContent {
+        height: 100%;
+    }
+
+    TabPane {
+        height: 100%;
+        padding: 0;
+    }
+
+    ContentSwitcher {
+        height: 100%;
+    }
+    """
+
+    def __init__(
+        self,
+        pipeline: DataPipeline,
+        settings: Settings,
+        *args,
+        **kwargs
+    ):
+        super().__init__(*args, **kwargs)
+        self.pipeline = pipeline
+        self.settings = settings
+
+    def compose(self) -> ComposeResult:
+        with TabbedContent(id="sandbox-tabs"):
+            with TabPane("Allocation Simulator", id="allocation-tab"):
+                yield AllocationSimulatorPanel(
+                    pipeline=self.pipeline,
+                    settings=self.settings,
+                )
+            with TabPane("Debt Optimizer", id="debt-tab"):
+                yield DebtOptimizerScreen(
+                    pipeline=self.pipeline,
+                    settings=self.settings,
+                )
+
+
+class AllocationSimulatorPanel(Widget):
+    """Vault allocation simulator panel."""
+
+    DEFAULT_CSS = """
+    AllocationSimulatorPanel {
+        height: 100%;
+        width: 100%;
         padding: 0 1;
     }
 
-    #sandbox-main {
+    #alloc-main {
         height: 100%;
         width: 100%;
     }
@@ -219,7 +275,7 @@ class SandboxScreen(Widget):
         self._initialized = False
 
     def compose(self) -> ComposeResult:
-        with Vertical(id="sandbox-main"):
+        with Vertical(id="alloc-main"):
             # Configuration Panel
             with Container(id="config-panel"):
                 yield Static("Vault Allocation Simulation", id="config-title")
