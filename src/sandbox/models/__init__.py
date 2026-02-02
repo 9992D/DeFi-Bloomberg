@@ -13,12 +13,15 @@ from .allocation import (
 )
 from .rebalancing import (
     RebalancingConfig,
+    RebalancingMode,
     RebalancingTrigger,
     MarketDebtInfo,
     DebtPosition,
     RebalancingOpportunity,
     RebalancingSnapshot,
     RebalancingMetrics,
+    RiskSnapshot,
+    PositionSummary,
     RebalancingResult,
 )
 
@@ -38,11 +41,14 @@ __all__ = [
     "MarketAllocation",
     # Rebalancing models
     "RebalancingConfig",
+    "RebalancingMode",
     "RebalancingTrigger",
     "MarketDebtInfo",
     "DebtPosition",
     "RebalancingOpportunity",
     "RebalancingSnapshot",
     "RebalancingMetrics",
+    "RiskSnapshot",
+    "PositionSummary",
     "RebalancingResult",
 ]
