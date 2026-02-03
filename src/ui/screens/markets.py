@@ -15,6 +15,7 @@ from rich.text import Text
 from config.settings import Settings
 from src.core.models import Market, KPIType, KPIStatus
 from src.data.pipeline import DataPipeline
+from src.data.clients.base import ProtocolType
 from src.analytics.engine import AnalyticsEngine
 from src.ui.screens.historical import HistoricalScreen
 
@@ -141,10 +142,18 @@ class MarketsScreen(Widget):
         Binding("h", "show_history", "History"),
     ]
 
-    def __init__(self, pipeline: DataPipeline, settings: Settings, *args, **kwargs):
+    def __init__(
+        self,
+        pipeline: DataPipeline,
+        settings: Settings,
+        protocol: Optional[ProtocolType] = None,
+        *args,
+        **kwargs
+    ):
         super().__init__(*args, **kwargs)
         self.pipeline = pipeline
         self.settings = settings
+        self.protocol = protocol  # None = use pipeline default
         self.analytics = AnalyticsEngine(pipeline=self.pipeline)
         self._markets: List[Market] = []
         self._filtered_markets: List[Market] = []
@@ -152,9 +161,21 @@ class MarketsScreen(Widget):
         self._collateral_filter: str = ""
         self._selected_market: Optional[Market] = None
 
+    @property
+    def _protocol_name(self) -> str:
+        """Get the display name for the current protocol."""
+        if self.protocol is None:
+            return "MORPHO BLUE"
+        elif self.protocol == ProtocolType.AAVE:
+            return "AAVE V3"
+        elif self.protocol == ProtocolType.MORPHO:
+            return "MORPHO BLUE"
+        else:
+            return self.protocol.value.upper()
+
     def compose(self) -> ComposeResult:
         with Container(id="markets-left"):
-            yield Static("MORPHO BLUE MARKETS", id="markets-left-header")
+            yield Static(f"{self._protocol_name} MARKETS", id="markets-left-header")
             with Horizontal(id="markets-filters"):
                 with Vertical(classes="filter-box"):
                     yield Label("Loan Asset (comma-separated)")
@@ -176,17 +197,20 @@ class MarketsScreen(Widget):
         table.add_column("Collat", width=8)
         table.add_column("LLTV", width=6)
         table.add_column("Supply", width=7)
+        table.add_column("Borrow", width=7)
         table.add_column("Util", width=6)
-        table.add_column("Created", width=10)
 
         await self._load_markets()
 
     async def _load_markets(self) -> None:
         try:
-            self._markets = await self.pipeline.get_markets(first=500)
+            self._markets = await self.pipeline.get_markets(
+                protocol=self.protocol,
+                first=500
+            )
             self._apply_filters()
         except Exception as e:
-            logger.error(f"Error: {e}")
+            logger.error(f"Error loading markets: {e}")
 
     async def refresh_data(self) -> None:
         """Refresh market data."""
@@ -238,15 +262,14 @@ class MarketsScreen(Widget):
         table.clear()
 
         for m in self._filtered_markets:
-            created = m.creation_timestamp.strftime("%Y-%m-%d") if m.creation_timestamp else "N/A"
             table.add_row(
                 shorten_address(m.id, 8),
                 m.loan_asset_symbol[:6],
                 m.collateral_asset_symbol[:6],
                 f"{float(m.lltv)*100:.0f}%",
                 f"{float(m.supply_apy)*100:.1f}%",
+                f"{float(m.borrow_apy)*100:.1f}%",
                 f"{float(m.utilization)*100:.0f}%",
-                created,
                 key=m.id,
             )
 
@@ -275,8 +298,13 @@ class MarketsScreen(Widget):
         kpi_widget.update("Loading KPIs...")
 
         try:
-            timeseries = await self.pipeline.get_market_timeseries(market.id)
-            kpis = await self.analytics.calculate_market_kpis(market, timeseries=timeseries)
+            timeseries = await self.pipeline.get_market_timeseries(
+                market.id,
+                protocol=self.protocol
+            )
+            kpis = await self.analytics.calculate_market_kpis(
+                market, timeseries=timeseries, protocol=self.protocol
+            )
 
             output = Text()
             output.append("─" * 42 + "\n", style="dim")
@@ -370,8 +398,9 @@ class MarketsScreen(Widget):
             self.notify("Select a market first", severity="warning")
             return
 
-        if not self.settings.alchemy_rpc_url:
+        # Aave has its own historical API, Morpho needs Alchemy
+        if self.protocol != ProtocolType.AAVE and not self.settings.alchemy_rpc_url:
             self.notify("Alchemy API key required for historical data", severity="warning")
             return
 
-        self.app.push_screen(HistoricalScreen(self._selected_market))
+        self.app.push_screen(HistoricalScreen(self._selected_market, protocol=self.protocol))

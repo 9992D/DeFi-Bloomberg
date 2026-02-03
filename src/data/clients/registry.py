@@ -130,10 +130,16 @@ def register_default_clients() -> None:
     """
     # Import here to avoid circular imports
     from src.data.clients.morpho.client import MorphoClient
+    from src.data.clients.aave.client import AaveClient
 
     ProtocolClientRegistry.register(
         ProtocolType.MORPHO,
         lambda settings: MorphoClient(settings),
+    )
+
+    ProtocolClientRegistry.register(
+        ProtocolType.AAVE,
+        lambda settings: AaveClient(settings),
     )
 
     logger.info("Registered default protocol clients")

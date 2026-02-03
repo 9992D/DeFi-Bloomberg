@@ -37,6 +37,12 @@ class Settings(BaseSettings):
         description="Morpho GraphQL API URL",
     )
 
+    # Aave API (official, free, no API key required)
+    aave_api_url: str = Field(
+        default="https://api.v3.aave.com/graphql",
+        description="Aave v3 official GraphQL API URL",
+    )
+
     # Analytics
     risk_free_rate: float = Field(
         default=0.00,

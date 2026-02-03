@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-DeFi-Bloomberg is a Bloomberg-style Terminal UI for monitoring and simulating DeFi lending positions. Built with Python and Textual TUI framework, it provides real-time analytics for decentralized finance markets with focus on **Morpho Blue** protocol.
+DeFi-Bloomberg is a Bloomberg-style Terminal UI for monitoring and simulating DeFi lending positions. Built with Python and Textual TUI framework, it provides real-time analytics for decentralized finance markets with support for **Morpho Blue** and **Aave v3** protocols.
 
 **Key Features:**
 - Real-time lending/borrowing market monitoring
@@ -41,7 +41,7 @@ pytest
 │              Data Layer                          │
 │  DataPipeline ──► DataAggregator                │
 │       │                                         │
-│  ProtocolClients (MorphoClient GQL)             │
+│  ProtocolClients (MorphoClient, AaveClient GQL) │
 │       │                                         │
 │  Caching (Memory + SQLite DiskCache)            │
 └─────────────────────────────────────────────────┘
@@ -79,16 +79,22 @@ DeFi-Bloomberg/
 │   │   │   ├── morpho/
 │   │   │   │   ├── client.py# MorphoClient (GraphQL)
 │   │   │   │   └── parser.py
+│   │   │   ├── aave/
+│   │   │   │   ├── client.py# AaveClient (GraphQL subgraph)
+│   │   │   │   └── parser.py# RAY/WAD conversions
 │   │   │   └── registry.py  # Client registration
 │   │   └── sources/
 │   │       ├── morpho_api.py# Low-level GraphQL
 │   │       └── risk_free_rates.py  # T-bills & Lido rates
 │   │
 │   ├── protocols/
-│   │   └── morpho/
-│   │       ├── config.py    # IRM params, addresses
-│   │       ├── assets.py    # Token addresses (collateral/borrow)
-│   │       ├── irm.py       # Interest Rate Model
+│   │   ├── morpho/
+│   │   │   ├── config.py    # IRM params, addresses
+│   │   │   ├── assets.py    # Token addresses (collateral/borrow)
+│   │   │   ├── irm.py       # Interest Rate Model
+│   │   │   └── queries.py   # GraphQL queries
+│   │   └── aave/
+│   │       ├── config.py    # Rate limits, subgraph URL
 │   │       └── queries.py   # GraphQL queries
 │   │
 │   ├── analytics/
@@ -129,7 +135,8 @@ DeFi-Bloomberg/
 ├── tests/
 │   ├── unit/
 │   │   ├── test_kpis.py
-│   │   └── test_morpho_api.py
+│   │   ├── test_morpho_api.py
+│   │   └── test_aave_api.py
 │   └── integration/
 │       └── test_pipeline.py
 │
@@ -148,7 +155,8 @@ DeFi-Bloomberg/
 
 ### Data Layer
 - **`src/data/pipeline.py`**: `DataPipeline` - main data orchestrator, manages caching
-- **`src/data/clients/morpho/client.py`**: `MorphoClient` - GraphQL API client
+- **`src/data/clients/morpho/client.py`**: `MorphoClient` - Morpho GraphQL API client
+- **`src/data/clients/aave/client.py`**: `AaveClient` - Aave v3 subgraph client
 - **`src/data/cache/disk_cache.py`**: `DiskCache` - SQLite-based persistent cache
 - **`src/data/sources/risk_free_rates.py`**: `RiskFreeRateProvider` - T-bills and Lido rates
 
@@ -215,6 +223,7 @@ UI_REFRESH_INTERVAL=60            # UI refresh (seconds)
 CACHE_DIR=.cache/morpho           # Cache directory
 CACHE_TTL_SECONDS=300             # Cache TTL
 MORPHO_API_URL=https://blue-api.morpho.org/graphql
+# AAVE_API_URL=https://api.v3.aave.com/graphql  # Official free API
 RISK_FREE_RATE=0                  # Fallback for Sharpe/Sortino
 FRED_API_KEY=your_key             # Optional: FRED API for T-bills rate
 ```
@@ -298,19 +307,21 @@ pytest -k "test_sharpe"  # Run tests matching pattern
 - **Caching**: diskcache 5.6+ (SQLite)
 - **Testing**: pytest, pytest-asyncio
 
-## Morpho Blue Specifics
+## Protocol Specifics
 
-### API Endpoint
-GraphQL: `https://blue-api.morpho.org/graphql`
-Rate limit: 5000 requests / 5 minutes
+### Morpho Blue
 
-### Key Concepts
+**API Endpoint:** `https://blue-api.morpho.org/graphql`
+**Rate limit:** 5000 requests / 5 minutes
+
+**Key Concepts:**
+- **Markets**: Explicit collateral/loan pairs (e.g., WETH/USDC @ 86% LLTV)
 - **LLTV**: Liquidation Loan-to-Value (e.g., 0.86 = 86%)
 - **Health Factor**: `(collateral * price * LLTV) / borrow`
 - **IRM**: Interest Rate Model - Adaptive Curve IRM
 - **Target Utilization**: 90% (where rates curve steepens)
 
-### Price Calculations
+**Price Calculations:**
 ```python
 # Collateral price in loan terms (e.g., WBTC/USDC = 80000)
 collateral_price = collateral_price_usd / loan_price_usd
@@ -322,6 +333,35 @@ borrow_amount = (collateral_amount * collateral_price * ltv)
 hf = (collateral_amount * collateral_price * lltv) / borrow_amount
 ```
 
+### Aave v3
+
+**API Endpoint:** Official Aave API (FREE, no API key required)
+```
+https://api.v3.aave.com/graphql
+```
+**Documentation:** https://aave.com/docs/aave-v3/getting-started/graphql
+**Rate limit:** 1000 requests / minute
+
+**Key Concepts:**
+- **Reserves**: Individual assets that can be supplied OR borrowed
+- **Collateral Model**: Global pool - any enabled asset can be collateral
+- **collateral_asset_symbol = "MULTI"**: Indicates any enabled collateral works
+- **Data Format**: API returns values already in decimal format (no RAY/WAD conversion needed)
+
+**Mapping Aave to Market model:**
+| Aave Reserve | Market Model |
+|--------------|--------------|
+| `underlyingToken.address` | `loan_asset` |
+| `underlyingToken.symbol` | `loan_asset_symbol` |
+| `""` | `collateral_asset` |
+| `"MULTI"` | `collateral_asset_symbol` |
+| `supplyInfo.liquidationThreshold.value` | `lltv` |
+| `supplyInfo.apy.value` | `supply_apy` |
+| `borrowInfo.apy.value` | `borrow_apy` |
+| `usdExchangeRate` | `loan_asset_price_usd` |
+
+**Market ID format:** `{chain_id}-{token_address}` (e.g., `1-0xa0b86991...`)
+
 ## Tips for Development
 
 1. **Always read files before editing** - Understand existing patterns
@@ -329,7 +369,8 @@ hf = (collateral_amount * collateral_price * lltv) / borrow_amount
 3. **Check market cache** - `_market_cache` in `DebtRebalancingOptimizer` stores `Market` objects with prices
 4. **Async everywhere** - Data layer is fully async
 5. **Test with real data** - Run UI to verify changes visually
-6. **Watch rate limits** - Morpho API has strict limits
+6. **Watch rate limits** - Morpho (5000/5min), Aave (1000/min)
+7. **Both APIs are free** - No API keys required for Morpho or Aave
 
 ## Recent Changes
 
@@ -364,3 +405,17 @@ hf = (collateral_amount * collateral_price * lltv) / borrow_amount
 - **Linear price interpolation**: Realistic hourly price movement in simulations
 - **Strict price validation**: Raises exception on missing price data (no silent fallback)
 - **Preserved debt after rebalancing**: Accumulated interest is maintained when redistributing positions
+
+### Aave v3 Integration (Latest)
+- Added `AaveClient` implementing `ProtocolClient` interface
+- **Uses official Aave API** at `https://api.v3.aave.com/graphql` (FREE, no API key!)
+- Reserve-centric model: each reserve maps to a Market with `collateral_asset_symbol = "MULTI"`
+- API returns decimal values directly (no RAY/WAD conversion needed)
+- Market ID format: `{chain_id}-{token_address}`
+- Full test coverage in `tests/unit/test_aave_api.py` (23 tests)
+
+**Key files:**
+- `src/data/clients/aave/client.py` - AaveClient
+- `src/data/clients/aave/parser.py` - Response parsing
+- `src/protocols/aave/config.py` - Rate limits, URLs
+- `src/protocols/aave/queries.py` - GraphQL queries

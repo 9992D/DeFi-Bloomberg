@@ -15,6 +15,7 @@ from rich.text import Text
 from config.settings import get_settings
 from src.core.models import Market, TimeseriesPoint
 from src.data.pipeline import DataPipeline
+from src.data.clients.base import ProtocolType
 
 logger = logging.getLogger(__name__)
 
@@ -68,9 +69,16 @@ class HistoricalScreen(Screen):
     }
     """
 
-    def __init__(self, market: Market, *args, **kwargs):
+    def __init__(
+        self,
+        market: Market,
+        protocol: ProtocolType = None,
+        *args,
+        **kwargs
+    ):
         super().__init__(*args, **kwargs)
         self.market = market
+        self.protocol = protocol
         self.settings = get_settings()
         self.pipeline = DataPipeline(settings=self.settings)
         self._timeseries: List[TimeseriesPoint] = []
@@ -107,7 +115,9 @@ class HistoricalScreen(Screen):
             self.query_one(chart_id, Static).update("")
 
         try:
-            self._timeseries = await self.pipeline.get_market_timeseries(self.market.id)
+            self._timeseries = await self.pipeline.get_market_timeseries(
+                self.market.id, protocol=self.protocol
+            )
 
             if self._timeseries:
                 loading.update("")

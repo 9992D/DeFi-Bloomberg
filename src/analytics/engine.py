@@ -3,10 +3,13 @@
 import asyncio
 import logging
 from datetime import datetime, timezone
-from typing import Dict, List, Optional, Type
+from typing import TYPE_CHECKING, Dict, List, Optional, Type
 
 from src.core.models import Market, TimeseriesPoint, KPIResult, KPIType, KPIStatus, MarketKPIs
 from src.data.pipeline import DataPipeline
+
+if TYPE_CHECKING:
+    from src.data.clients.base import ProtocolType
 from src.analytics.kpis import (
     BaseKPICalculator,
     VolatilityCalculator,
@@ -98,6 +101,7 @@ class AnalyticsEngine:
         timeseries: Optional[List[TimeseriesPoint]] = None,
         kpi_types: Optional[List[KPIType]] = None,
         timeseries_hours: Optional[int] = None,
+        protocol: Optional["ProtocolType"] = None,
     ) -> MarketKPIs:
         """
         Calculate KPIs for a single market.
@@ -107,6 +111,7 @@ class AnalyticsEngine:
             timeseries: Pre-fetched timeseries (optional)
             kpi_types: Specific KPIs to calculate (None = all)
             timeseries_hours: Hours of data (None = all available)
+            protocol: Protocol type for fetching timeseries (if not provided)
 
         Returns:
             MarketKPIs with all calculated results
@@ -118,7 +123,7 @@ class AnalyticsEngine:
         # Fetch timeseries if still not available
         if timeseries is None:
             timeseries = await self.pipeline.get_market_timeseries(
-                market.id, hours=timeseries_hours
+                market.id, hours=timeseries_hours, protocol=protocol
             )
 
         # Determine which KPIs to calculate

@@ -62,6 +62,7 @@ class LendingCategoryScreen(Widget):
         """Compose the lending category with protocol tabs."""
         # Import here to avoid circular imports
         from src.ui.screens.lending.morpho import MorphoLendingScreen
+        from src.ui.screens.lending.aave import AaveLendingScreen
 
         with TabbedContent(initial="lending-morpho", id="lending-tabs"):
             with TabPane("Morpho", id="lending-morpho"):
@@ -73,9 +74,16 @@ class LendingCategoryScreen(Widget):
                 self._protocol_screens[ProtocolType.MORPHO] = screen
                 yield screen
 
+            with TabPane("Aave", id="lending-aave"):
+                aave_screen = AaveLendingScreen(
+                    pipeline=self.pipeline,
+                    settings=self.settings,
+                    id="aave-lending-screen"
+                )
+                self._protocol_screens[ProtocolType.AAVE] = aave_screen
+                yield aave_screen
+
             # Future protocol tabs would be added here:
-            # with TabPane("Aave", id="lending-aave"):
-            #     yield AaveLendingScreen(...)
             # with TabPane("Euler", id="lending-euler"):
             #     yield EulerLendingScreen(...)
 
@@ -108,9 +116,15 @@ class LendingCategoryScreen(Widget):
             if screen and not screen._initialized:
                 await screen.initialize()
 
+        elif pane_id == "lending-aave":
+            self._active_protocol = ProtocolType.AAVE
+            screen = self._protocol_screens.get(ProtocolType.AAVE)
+            if screen and not screen._initialized:
+                await screen.initialize()
+
         # Future protocol handling:
-        # elif pane_id == "lending-aave":
-        #     self._active_protocol = ProtocolType.AAVE
+        # elif pane_id == "lending-euler":
+        #     self._active_protocol = ProtocolType.EULER
         #     ...
 
     def get_active_screen(self) -> Optional[LendingProtocolScreen]:

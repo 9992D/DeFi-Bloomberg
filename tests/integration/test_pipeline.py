@@ -6,7 +6,7 @@ from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from src.data.pipeline import DataPipeline
-from src.data.sources.morpho_api import MorphoAPIClient
+from src.data.clients.base import ProtocolClient, ProtocolType
 from src.data.cache.disk_cache import DiskCache
 from src.core.models import Market, MarketState
 
@@ -42,15 +42,19 @@ class TestDataPipeline:
         )
 
     @pytest.fixture
-    def mock_api(self, mock_market):
-        """Create a mock API client."""
-        api = MagicMock(spec=MorphoAPIClient)
-        api.get_markets = AsyncMock(return_value=[mock_market])
-        api.get_market = AsyncMock(return_value=mock_market)
-        api.get_market_timeseries = AsyncMock(return_value=[])
-        api.get_positions = AsyncMock(return_value=[])
-        api.close = AsyncMock()
-        return api
+    def mock_client(self, mock_market):
+        """Create a mock protocol client."""
+        client = MagicMock(spec=ProtocolClient)
+        client.protocol_type = ProtocolType.MORPHO
+        client.protocol_name = "Morpho Blue"
+        client.supports_vaults = True
+        client.get_markets = AsyncMock(return_value=[mock_market])
+        client.get_market = AsyncMock(return_value=mock_market)
+        client.get_market_timeseries = AsyncMock(return_value=[])
+        client.get_positions = AsyncMock(return_value=[])
+        client.get_vaults = AsyncMock(return_value=[])
+        client.close = AsyncMock()
+        return client
 
     @pytest.fixture
     def mock_cache(self):
@@ -63,34 +67,39 @@ class TestDataPipeline:
         return cache
 
     @pytest.fixture
-    def pipeline(self, mock_api, mock_cache):
+    def pipeline(self, mock_client, mock_cache):
         """Create a pipeline with mocked dependencies."""
-        return DataPipeline(api_client=mock_api, cache=mock_cache)
+        clients = {ProtocolType.MORPHO: mock_client}
+        return DataPipeline(
+            clients=clients,
+            cache=mock_cache,
+            default_protocol=ProtocolType.MORPHO,
+        )
 
     @pytest.mark.asyncio
-    async def test_get_markets_first_call(self, pipeline, mock_api, mock_market):
+    async def test_get_markets_first_call(self, pipeline, mock_client, mock_market):
         """Test fetching markets on first call."""
         markets = await pipeline.get_markets()
 
         assert len(markets) == 1
         assert markets[0].id == mock_market.id
-        mock_api.get_markets.assert_called_once()
+        mock_client.get_markets.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_get_markets_memory_cache_hit(self, pipeline, mock_api, mock_market):
+    async def test_get_markets_memory_cache_hit(self, pipeline, mock_client, mock_market):
         """Test that second call uses memory cache."""
         # First call
         await pipeline.get_markets()
-        mock_api.get_markets.assert_called_once()
+        mock_client.get_markets.assert_called_once()
 
         # Second call should use memory cache
         markets = await pipeline.get_markets()
         assert len(markets) == 1
         # API should still only be called once
-        mock_api.get_markets.assert_called_once()
+        mock_client.get_markets.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_get_markets_force_refresh(self, pipeline, mock_api, mock_market):
+    async def test_get_markets_force_refresh(self, pipeline, mock_client, mock_market):
         """Test force refresh bypasses memory cache."""
         # First call
         await pipeline.get_markets()
@@ -100,10 +109,10 @@ class TestDataPipeline:
 
         assert len(markets) == 1
         # API should be called twice
-        assert mock_api.get_markets.call_count == 2
+        assert mock_client.get_markets.call_count == 2
 
     @pytest.mark.asyncio
-    async def test_get_market(self, pipeline, mock_api, mock_market):
+    async def test_get_market(self, pipeline, mock_client, mock_market):
         """Test fetching single market."""
         market = await pipeline.get_market("0xtest123")
 
@@ -111,7 +120,7 @@ class TestDataPipeline:
         assert market.id == mock_market.id
 
     @pytest.mark.asyncio
-    async def test_get_market_from_memory_cache(self, pipeline, mock_api, mock_market):
+    async def test_get_market_from_memory_cache(self, pipeline, mock_client, mock_market):
         """Test fetching market from memory cache after loading markets."""
         # Load markets first
         await pipeline.get_markets()
@@ -122,19 +131,19 @@ class TestDataPipeline:
         assert market is not None
         assert market.id == mock_market.id
         # get_market API should not be called since it's in memory
-        mock_api.get_market.assert_not_called()
+        mock_client.get_market.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_get_market_not_found(self, pipeline, mock_api):
+    async def test_get_market_not_found(self, pipeline, mock_client):
         """Test fetching non-existent market."""
-        mock_api.get_market.return_value = None
+        mock_client.get_market.return_value = None
 
         market = await pipeline.get_market("nonexistent")
 
         assert market is None
 
     @pytest.mark.asyncio
-    async def test_refresh_all(self, pipeline, mock_api, mock_market):
+    async def test_refresh_all(self, pipeline, mock_client, mock_market):
         """Test refresh all data."""
         results = await pipeline.refresh_all()
 
@@ -151,13 +160,46 @@ class TestDataPipeline:
         count = pipeline.clear_cache()
 
         assert count == 2
-        assert pipeline._markets_cache is None
+        assert len(pipeline._markets_cache) == 0
         assert len(pipeline._timeseries_cache) == 0
 
     @pytest.mark.asyncio
-    async def test_close(self, pipeline, mock_api, mock_cache):
+    async def test_close(self, pipeline, mock_client, mock_cache):
         """Test closing pipeline."""
         await pipeline.close()
 
-        mock_api.close.assert_called_once()
+        mock_client.close.assert_called_once()
         mock_cache.close.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_get_markets_with_protocol(self, pipeline, mock_client, mock_market):
+        """Test fetching markets with explicit protocol."""
+        markets = await pipeline.get_markets(protocol=ProtocolType.MORPHO)
+
+        assert len(markets) == 1
+        assert markets[0].id == mock_market.id
+        mock_client.get_markets.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_available_protocols(self, pipeline):
+        """Test listing available protocols."""
+        protocols = pipeline.available_protocols
+
+        assert ProtocolType.MORPHO in protocols
+
+    def test_get_client(self, pipeline, mock_client):
+        """Test getting client for protocol."""
+        client = pipeline.get_client(ProtocolType.MORPHO)
+
+        assert client == mock_client
+
+    def test_get_client_default(self, pipeline, mock_client):
+        """Test getting default client."""
+        client = pipeline.get_client()
+
+        assert client == mock_client
+
+    def test_get_client_not_found(self, pipeline):
+        """Test getting client for unavailable protocol."""
+        with pytest.raises(ValueError, match="No client available"):
+            pipeline.get_client(ProtocolType.AAVE)

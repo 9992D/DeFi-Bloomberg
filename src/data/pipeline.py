@@ -429,5 +429,13 @@ class DataPipeline:
 
     async def close(self) -> None:
         """Close all connections."""
+        # Close directly injected clients
+        for client in self._clients.values():
+            try:
+                await client.close()
+            except Exception as e:
+                logger.warning(f"Error closing client {client.protocol_name}: {e}")
+
+        # Also close any clients in the registry
         await ProtocolClientRegistry.close_all()
         self.cache.close()
