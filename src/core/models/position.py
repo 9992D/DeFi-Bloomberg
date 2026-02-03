@@ -79,3 +79,22 @@ class Position:
         if isinstance(other, Position):
             return self.market_id == other.market_id and self.user == other.user
         return False
+
+    def to_dict(self) -> dict:
+        """Serialize to dictionary."""
+        return {
+            "market_id": self.market_id,
+            "user": self.user,
+            "supply_shares": str(self.supply_shares),
+            "supply_assets": str(self.supply_assets),
+            "borrow_shares": str(self.borrow_shares),
+            "borrow_assets": str(self.borrow_assets),
+            "collateral": str(self.collateral),
+            "last_update": self.last_update.isoformat() if self.last_update else None,
+            "market": self.market.to_dict() if self.market else None,
+            "is_supplier": self.is_supplier,
+            "is_borrower": self.is_borrower,
+            "net_position": str(self.net_position),
+            "health_factor": str(self.health_factor) if self.health_factor else None,
+            "liquidation_price": str(self.liquidation_price) if self.liquidation_price else None,
+        }

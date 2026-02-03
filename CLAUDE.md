@@ -81,11 +81,13 @@ DeFi-Bloomberg/
 │   │   │   │   └── parser.py
 │   │   │   └── registry.py  # Client registration
 │   │   └── sources/
-│   │       └── morpho_api.py# Low-level GraphQL
+│   │       ├── morpho_api.py# Low-level GraphQL
+│   │       └── risk_free_rates.py  # T-bills & Lido rates
 │   │
 │   ├── protocols/
 │   │   └── morpho/
 │   │       ├── config.py    # IRM params, addresses
+│   │       ├── assets.py    # Token addresses (collateral/borrow)
 │   │       ├── irm.py       # Interest Rate Model
 │   │       └── queries.py   # GraphQL queries
 │   │
@@ -148,6 +150,7 @@ DeFi-Bloomberg/
 - **`src/data/pipeline.py`**: `DataPipeline` - main data orchestrator, manages caching
 - **`src/data/clients/morpho/client.py`**: `MorphoClient` - GraphQL API client
 - **`src/data/cache/disk_cache.py`**: `DiskCache` - SQLite-based persistent cache
+- **`src/data/sources/risk_free_rates.py`**: `RiskFreeRateProvider` - T-bills and Lido rates
 
 ### Sandbox Engine
 - **`src/sandbox/engine/allocator.py`**: `AllocationSimulator` - vault allocation strategies
@@ -212,8 +215,39 @@ UI_REFRESH_INTERVAL=60            # UI refresh (seconds)
 CACHE_DIR=.cache/morpho           # Cache directory
 CACHE_TTL_SECONDS=300             # Cache TTL
 MORPHO_API_URL=https://blue-api.morpho.org/graphql
-RISK_FREE_RATE=0                  # For Sharpe/Sortino
+RISK_FREE_RATE=0                  # Fallback for Sharpe/Sortino
+FRED_API_KEY=your_key             # Optional: FRED API for T-bills rate
 ```
+
+### Dynamic Risk-Free Rates for Sharpe/Sortino
+Risk-free rates are automatically determined based on the market's **loan asset**:
+
+| Asset Type | Examples | Risk-Free Rate | Source |
+|------------|----------|----------------|--------|
+| Stablecoins | USDC, USDT, DAI, EURC | ~5% | FRED API (T-bills) |
+| ETH | WETH, ETH | ~3.5% | Lido API |
+| wstETH | wstETH | 0% | Inherent yield |
+| Staked ETH | rETH, cbETH, weETH | 0% | Inherent yield |
+| Other | WBTC, etc. | 0% | No benchmark |
+
+**Key files:**
+- `src/data/sources/risk_free_rates.py` - Rate provider with caching
+- `src/analytics/kpis/risk_adjusted.py` - Sharpe/Sortino calculators
+
+**Usage:**
+```python
+from src.data.sources.risk_free_rates import get_risk_free_rate_sync, prefetch_risk_free_rates
+
+# Sync (uses cache or fallback)
+rate, rate_type = get_risk_free_rate_sync("0xA0b86991...", "USDC")
+
+# Async (fetches fresh data)
+await prefetch_risk_free_rates()  # Pre-fetch all rates
+```
+
+**APIs:**
+- FRED: `https://api.stlouisfed.org/fred/series/observations` (DGS3MO series)
+- Lido: `https://eth-api.lido.fi/v1/protocol/steth/apr/sma`
 
 ### Settings Class
 ```python
@@ -299,7 +333,24 @@ hf = (collateral_amount * collateral_price * lltv) / borrow_amount
 
 ## Recent Changes
 
-### Debt Optimizer Enhancement (Latest)
+### Dynamic Risk-Free Rates (Latest)
+- Sharpe/Sortino now use asset-specific risk-free rates
+- Stablecoins: T-bills rate from FRED API (~5%)
+- WETH/ETH: Lido staking APR (~3.5%)
+- wstETH and staked ETH derivatives: 0% (inherent yield)
+- Added `src/data/sources/risk_free_rates.py` for rate fetching
+- Added `FRED_API_KEY` config option for Treasury rates
+- Rates cached for 1 hour to minimize API calls
+
+### Code Quality Improvements
+- Added `to_dict()` methods to all core models (Market, Vault, Position, etc.)
+- Fixed `datetime.utcnow()` deprecation (Python 3.12+) → `datetime.now(timezone.utc)`
+- Fixed `risk_free_rate` validator bug in settings
+- Fixed `KPIStatus` import in analytics engine
+- Added LRU cache eviction to `DebtRebalancingOptimizer` (TTL 5min, max 100 entries)
+- Moved hardcoded addresses to `src/protocols/morpho/assets.py`
+
+### Debt Optimizer Enhancement
 - Added `_get_collateral_price()` for real prices from API
 - Fixed borrow amount calculation: `collateral * price_usd * ltv / loan_price`
 - Added dynamic price simulation in backtest

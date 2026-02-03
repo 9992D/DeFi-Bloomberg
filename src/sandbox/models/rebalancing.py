@@ -1,7 +1,7 @@
 """Debt rebalancing optimization models."""
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from enum import Enum
 from typing import List, Dict, Optional
@@ -520,7 +520,7 @@ class RebalancingResult:
 
     def __post_init__(self):
         if self.created_at is None:
-            self.created_at = datetime.utcnow()
+            self.created_at = datetime.now(timezone.utc)
 
     @property
     def duration_days(self) -> int:

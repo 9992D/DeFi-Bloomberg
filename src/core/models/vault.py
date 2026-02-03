@@ -23,6 +23,18 @@ class VaultAllocation:
         """Placeholder - calculated by Vault.get_allocation_percents()."""
         return Decimal("0")
 
+    def to_dict(self) -> dict:
+        """Serialize to dictionary."""
+        return {
+            "market_id": self.market_id,
+            "loan_asset_symbol": self.loan_asset_symbol,
+            "collateral_asset_symbol": self.collateral_asset_symbol,
+            "lltv": str(self.lltv),
+            "supply_assets": str(self.supply_assets),
+            "supply_assets_usd": str(self.supply_assets_usd),
+            "supply_shares": str(self.supply_shares),
+        }
+
 
 @dataclass
 class VaultState:
@@ -37,6 +49,19 @@ class VaultState:
     last_update: datetime
     allocation: List[VaultAllocation] = field(default_factory=list)
 
+    def to_dict(self) -> dict:
+        """Serialize to dictionary."""
+        return {
+            "total_assets": str(self.total_assets),
+            "total_assets_usd": str(self.total_assets_usd),
+            "total_supply": str(self.total_supply),
+            "fee": str(self.fee),
+            "share_price": str(self.share_price),
+            "share_price_usd": str(self.share_price_usd),
+            "last_update": self.last_update.isoformat(),
+            "allocation": [a.to_dict() for a in self.allocation],
+        }
+
 
 @dataclass
 class VaultTimeseriesPoint:
@@ -47,6 +72,16 @@ class VaultTimeseriesPoint:
     net_apy: Decimal
     total_assets: Decimal
     share_price: Optional[Decimal] = None
+
+    def to_dict(self) -> dict:
+        """Serialize to dictionary."""
+        return {
+            "timestamp": self.timestamp.isoformat(),
+            "apy": str(self.apy),
+            "net_apy": str(self.net_apy),
+            "total_assets": str(self.total_assets),
+            "share_price": str(self.share_price) if self.share_price else None,
+        }
 
 
 @dataclass
@@ -109,10 +144,29 @@ class Vault:
                 collateral = alloc.collateral_asset_symbol or "Idle"
                 result.append((
                     f"{alloc.loan_asset_symbol}/{collateral}",
-                    float(pct),
-                    float(alloc.supply_assets_usd),
+                    pct,
+                    alloc.supply_assets_usd,
                 ))
 
         # Sort by percentage descending
         result.sort(key=lambda x: x[1], reverse=True)
         return result
+
+    def to_dict(self) -> dict:
+        """Serialize to dictionary."""
+        return {
+            "id": self.id,
+            "name": self.name,
+            "symbol": self.symbol,
+            "asset_address": self.asset_address,
+            "asset_symbol": self.asset_symbol,
+            "asset_decimals": self.asset_decimals,
+            "asset_price_usd": str(self.asset_price_usd),
+            "apy": str(self.apy),
+            "net_apy": str(self.net_apy),
+            "creation_timestamp": self.creation_timestamp.isoformat() if self.creation_timestamp else None,
+            "state": self.state.to_dict() if self.state else None,
+            "tvl": str(self.tvl),
+            "share_price": str(self.share_price),
+            "total_shares": str(self.total_shares),
+        }

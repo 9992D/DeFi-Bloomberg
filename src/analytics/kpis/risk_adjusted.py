@@ -1,15 +1,35 @@
-"""Risk-adjusted return KPI calculators (Sharpe, Sortino)."""
+"""Risk-adjusted return KPI calculators (Sharpe, Sortino).
+
+Risk-free rates are determined dynamically based on asset type:
+- Stablecoins (USDC, USDT, DAI, etc.): US T-bills rate
+- WETH/ETH: Lido staking APR
+- wstETH: 0% (inherent staking yield)
+- Other tokens: 0%
+"""
 
 from decimal import Decimal
-from typing import List
+from typing import List, Tuple
 
 import numpy as np
 
-from src.core.constants import HOURS_PER_YEAR
 from src.core.models import Market, TimeseriesPoint, KPIResult, KPIType
-from config.settings import get_settings
 
 from .base import BaseKPICalculator
+
+
+def _get_dynamic_risk_free_rate(market: Market) -> Tuple[float, str]:
+    """
+    Get the appropriate risk-free rate based on the market's loan asset.
+
+    Returns:
+        Tuple of (rate, rate_type_description)
+    """
+    from src.data.sources.risk_free_rates import get_risk_free_rate_sync
+
+    return get_risk_free_rate_sync(
+        loan_asset_address=market.loan_asset,
+        loan_asset_symbol=market.loan_asset_symbol,
+    )
 
 
 class SharpeCalculator(BaseKPICalculator):
@@ -17,6 +37,12 @@ class SharpeCalculator(BaseKPICalculator):
     Calculate Sharpe Ratio for rate returns.
 
     Sharpe Ratio = (APY - Risk-free Rate) / σ
+
+    Risk-free rates are determined dynamically:
+    - Stablecoins (USDC, USDT, etc.): US T-bills rate
+    - WETH/ETH: Lido staking APR
+    - wstETH: 0% (inherent staking yield)
+    - Other tokens: 0%
 
     Higher Sharpe indicates better risk-adjusted returns.
     """
@@ -42,7 +68,7 @@ class SharpeCalculator(BaseKPICalculator):
         Args:
             market: Market object
             timeseries: Historical data points
-            risk_free_rate: Annual risk-free rate (default from settings)
+            risk_free_rate: Annual risk-free rate (None = auto-detect based on asset)
 
         Returns:
             KPIResult with Sharpe Ratio
@@ -51,8 +77,11 @@ class SharpeCalculator(BaseKPICalculator):
         if insufficient:
             return insufficient
 
+        # Determine risk-free rate based on loan asset type
         if risk_free_rate is None:
-            risk_free_rate = get_settings().risk_free_rate
+            risk_free_rate, rate_type = _get_dynamic_risk_free_rate(market)
+        else:
+            rate_type = "manual override"
 
         try:
             # Extract supply APYs
@@ -85,6 +114,8 @@ class SharpeCalculator(BaseKPICalculator):
                     "mean_apy": float(mean_apy),
                     "std_apy": float(std_apy),
                     "risk_free_rate": float(risk_free_rate),
+                    "risk_free_rate_type": rate_type,
+                    "loan_asset": market.loan_asset_symbol,
                     "excess_return": float(mean_apy - risk_free_rate),
                 },
             )
@@ -98,6 +129,12 @@ class SortinoCalculator(BaseKPICalculator):
     Calculate Sortino Ratio for rate returns.
 
     Sortino Ratio = (APY - Risk-free Rate) / σ_downside
+
+    Risk-free rates are determined dynamically:
+    - Stablecoins (USDC, USDT, etc.): US T-bills rate
+    - WETH/ETH: Lido staking APR
+    - wstETH: 0% (inherent staking yield)
+    - Other tokens: 0%
 
     Only considers downside volatility, better for asymmetric returns.
     """
@@ -124,7 +161,7 @@ class SortinoCalculator(BaseKPICalculator):
         Args:
             market: Market object
             timeseries: Historical data points
-            risk_free_rate: Annual risk-free rate (default from settings)
+            risk_free_rate: Annual risk-free rate (None = auto-detect based on asset)
             mar: Minimum Acceptable Return (default = risk_free_rate)
 
         Returns:
@@ -134,8 +171,11 @@ class SortinoCalculator(BaseKPICalculator):
         if insufficient:
             return insufficient
 
+        # Determine risk-free rate based on loan asset type
         if risk_free_rate is None:
-            risk_free_rate = get_settings().risk_free_rate
+            risk_free_rate, rate_type = _get_dynamic_risk_free_rate(market)
+        else:
+            rate_type = "manual override"
 
         if mar is None:
             mar = risk_free_rate
@@ -177,6 +217,8 @@ class SortinoCalculator(BaseKPICalculator):
                     "mean_apy": float(mean_apy),
                     "downside_std": float(downside_std),
                     "risk_free_rate": float(risk_free_rate),
+                    "risk_free_rate_type": rate_type,
+                    "loan_asset": market.loan_asset_symbol,
                     "mar": float(mar),
                     "downside_periods": len(downside_returns) if len(downside_returns) > 0 else 0,
                 },

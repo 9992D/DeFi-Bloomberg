@@ -44,6 +44,20 @@ class TimeseriesPoint:
             return self.timestamp == other.timestamp
         return False
 
+    def to_dict(self) -> dict:
+        """Serialize to dictionary."""
+        return {
+            "timestamp": self.timestamp.isoformat(),
+            "supply_apy": str(self.supply_apy),
+            "borrow_apy": str(self.borrow_apy),
+            "utilization": str(self.utilization),
+            "rate_at_target": str(self.rate_at_target) if self.rate_at_target else None,
+            "total_supply_assets": str(self.total_supply_assets) if self.total_supply_assets else None,
+            "total_borrow_assets": str(self.total_borrow_assets) if self.total_borrow_assets else None,
+            "collateral_price_usd": str(self.collateral_price_usd) if self.collateral_price_usd else None,
+            "loan_price_usd": str(self.loan_price_usd) if self.loan_price_usd else None,
+        }
+
 
 @dataclass
 class AggregatedTimeseries:
@@ -87,3 +101,13 @@ class AggregatedTimeseries:
             end_time=end,
             interval_hours=self.interval_hours,
         )
+
+    def to_dict(self) -> dict:
+        """Serialize to dictionary."""
+        return {
+            "market_id": self.market_id,
+            "points": [p.to_dict() for p in self.points],
+            "start_time": self.start_time.isoformat(),
+            "end_time": self.end_time.isoformat(),
+            "interval_hours": self.interval_hours,
+        }

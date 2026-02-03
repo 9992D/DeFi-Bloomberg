@@ -2,10 +2,10 @@
 
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List, Optional, Type
 
-from src.core.models import Market, TimeseriesPoint, KPIResult, KPIType, MarketKPIs
+from src.core.models import Market, TimeseriesPoint, KPIResult, KPIType, KPIStatus, MarketKPIs
 from src.data.pipeline import DataPipeline
 from src.analytics.kpis import (
     BaseKPICalculator,
@@ -46,6 +46,7 @@ class AnalyticsEngine:
     ):
         self.pipeline = pipeline or DataPipeline()
         self._calculators: Dict[KPIType, BaseKPICalculator] = {}
+        self._rates_prefetched = False
 
         # Register calculators
         if calculators:
@@ -55,6 +56,26 @@ class AnalyticsEngine:
             # Use default calculators
             for calc_class in self.DEFAULT_CALCULATORS:
                 self.register_calculator(calc_class())
+
+    async def prefetch_risk_free_rates(self) -> None:
+        """
+        Pre-fetch and cache risk-free rates for Sharpe/Sortino calculations.
+
+        Call this once before calculating KPIs to ensure rates are cached.
+        Rates are fetched from:
+        - US T-bills (FRED API or fallback)
+        - Lido staking APR
+        """
+        if self._rates_prefetched:
+            return
+
+        try:
+            from src.data.sources.risk_free_rates import prefetch_risk_free_rates
+            await prefetch_risk_free_rates()
+            self._rates_prefetched = True
+            logger.info("Risk-free rates pre-fetched successfully")
+        except Exception as e:
+            logger.warning(f"Failed to pre-fetch risk-free rates: {e}")
 
     def register_calculator(self, calculator: BaseKPICalculator) -> None:
         """Register a KPI calculator."""
@@ -122,7 +143,7 @@ class AnalyticsEngine:
                         kpi_type=kpi_type,
                         market_id=market.id,
                         value=None,
-                        status=KPIResult.KPIStatus.ERROR if hasattr(KPIResult, 'KPIStatus') else 2,
+                        status=KPIStatus.ERROR,
                         error_message=str(e),
                     )
                 )
@@ -148,6 +169,9 @@ class AnalyticsEngine:
         Returns:
             Dict mapping market_id to MarketKPIs
         """
+        # Pre-fetch risk-free rates for Sharpe/Sortino calculations
+        await self.prefetch_risk_free_rates()
+
         # Fetch markets if not provided
         if markets is None:
             markets = await self.pipeline.get_markets()
@@ -221,7 +245,7 @@ class AnalyticsEngine:
                 }
                 for kpi_type, result in kpis.kpis.items()
             },
-            "calculated_at": datetime.utcnow().isoformat(),
+            "calculated_at": datetime.now(timezone.utc).isoformat(),
         }
 
     def calculate_sync(

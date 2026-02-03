@@ -2,7 +2,7 @@
 
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 from typing import List, Optional, Dict, Any
@@ -75,7 +75,7 @@ class StrategyStorage:
         
         data = config.to_dict()
         data["_id"] = strategy_id
-        data["_saved_at"] = datetime.utcnow().isoformat()
+        data["_saved_at"] = datetime.now(timezone.utc).isoformat()
         
         with open(file_path, "w") as f:
             json.dump(data, f, cls=DecimalEncoder, indent=2)
@@ -173,7 +173,7 @@ class StrategyStorage:
             Result ID
         """
         if result_id is None:
-            result_id = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+            result_id = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         
         # Create strategy results directory
         result_dir = self.results_dir / strategy_id
@@ -295,7 +295,7 @@ class StrategyStorage:
         safe_name = config.name.lower()
         safe_name = re.sub(r'[^a-z0-9]+', '_', safe_name)[:20]
         safe_name = safe_name.strip('_')
-        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         return f"{safe_name}_{timestamp}"
     
     def _parse_result(self, data: Dict[str, Any]) -> SimulationResult:

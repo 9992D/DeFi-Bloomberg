@@ -1,9 +1,10 @@
 """Debt rebalancing optimizer for lending markets."""
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import List, Dict, Optional, Tuple
+from collections import OrderedDict
 import statistics
 
 from src.sandbox.models.rebalancing import (
@@ -38,9 +39,48 @@ class DebtRebalancingOptimizer:
     - Historical simulation with benchmarking
     """
 
+    # Cache configuration
+    CACHE_TTL_SECONDS = 300  # 5 minutes
+    CACHE_MAX_ENTRIES = 100
+
     def __init__(self, data: DataAggregator):
         self.data = data
-        self._market_cache: Dict[str, Market] = {}
+        self._market_cache: OrderedDict[str, Tuple[Market, datetime]] = OrderedDict()
+
+    def _cache_market(self, market: Market) -> None:
+        """Add market to cache with timestamp, evicting old entries if needed."""
+        now = datetime.now(timezone.utc)
+
+        # Evict expired entries
+        expired_keys = [
+            key for key, (_, ts) in self._market_cache.items()
+            if (now - ts).total_seconds() > self.CACHE_TTL_SECONDS
+        ]
+        for key in expired_keys:
+            del self._market_cache[key]
+
+        # Evict oldest entries if over max size
+        while len(self._market_cache) >= self.CACHE_MAX_ENTRIES:
+            self._market_cache.popitem(last=False)
+
+        # Add new entry (move to end if exists for LRU)
+        if market.id in self._market_cache:
+            self._market_cache.move_to_end(market.id)
+        self._market_cache[market.id] = (market, now)
+
+    def _get_cached_market(self, market_id: str) -> Optional[Market]:
+        """Get market from cache if valid, None otherwise."""
+        if market_id not in self._market_cache:
+            return None
+
+        market, ts = self._market_cache[market_id]
+        if (datetime.now(timezone.utc) - ts).total_seconds() > self.CACHE_TTL_SECONDS:
+            del self._market_cache[market_id]
+            return None
+
+        # Move to end for LRU
+        self._market_cache.move_to_end(market_id)
+        return market
 
     def _get_collateral_price(
         self,
@@ -52,8 +92,8 @@ class DebtRebalancingOptimizer:
         """
         # Get prices from first available market in cache
         for market in markets:
-            if market.market_id in self._market_cache:
-                m = self._market_cache[market.market_id]
+            m = self._get_cached_market(market.market_id)
+            if m:
                 return (m.collateral_asset_price_usd, m.loan_asset_price_usd)
         return (Decimal("1"), Decimal("1"))  # Fallback
 
@@ -76,7 +116,7 @@ class DebtRebalancingOptimizer:
             f"borrow={config.total_debt}"
         )
 
-        start_time = datetime.utcnow()
+        start_time = datetime.now(timezone.utc)
 
         try:
             # 1. Discover available markets
@@ -85,7 +125,7 @@ class DebtRebalancingOptimizer:
                 return RebalancingResult(
                     config=config,
                     start_time=start_time,
-                    end_time=datetime.utcnow(),
+                    end_time=datetime.now(timezone.utc),
                     success=False,
                     error_message=f"No markets found for {config.collateral_asset}/{config.borrow_asset}",
                 )
@@ -120,7 +160,7 @@ class DebtRebalancingOptimizer:
                 analyzed_markets, positions, config
             )
 
-            end_time = datetime.utcnow()
+            end_time = datetime.now(timezone.utc)
 
             result = RebalancingResult(
                 config=config,
@@ -149,7 +189,7 @@ class DebtRebalancingOptimizer:
             return RebalancingResult(
                 config=config,
                 start_time=start_time,
-                end_time=datetime.utcnow(),
+                end_time=datetime.now(timezone.utc),
                 success=False,
                 error_message=str(e),
             )
@@ -215,7 +255,7 @@ class DebtRebalancingOptimizer:
                 continue
 
             valid_markets.append(m)
-            self._market_cache[m.id] = m
+            self._cache_market(m)
 
         # Sort by TVL descending
         valid_markets.sort(key=lambda x: float(x.tvl), reverse=True)

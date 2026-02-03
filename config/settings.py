@@ -38,7 +38,18 @@ class Settings(BaseSettings):
     )
 
     # Analytics
-    risk_free_rate: float = Field(default=0.00, ge=0.0, le=0.00, description="Risk-free rate for Sharpe/Sortino")
+    risk_free_rate: float = Field(
+        default=0.00,
+        ge=0.0,
+        le=0.20,
+        description="Default risk-free rate (fallback when dynamic rates unavailable)",
+    )
+
+    # FRED API for T-bills rate (optional, uses fallback if not set)
+    fred_api_key: Optional[str] = Field(
+        default=None,
+        description="FRED API key for US Treasury rates (get at https://fred.stlouisfed.org/docs/api/api_key.html)",
+    )
 
     @field_validator("wallet_addresses", mode="before")
     @classmethod
