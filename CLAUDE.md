@@ -357,3 +357,10 @@ hf = (collateral_amount * collateral_price * lltv) / borrow_amount
 - Added compound interest tracking on debt
 - Added margin call detection
 - Updated UI to show USD values
+
+### Debt Optimizer Math Fixes (v1.1)
+- **Health Factor formula fixed**: Now uses correct `HF = (collateral × price × LLTV) / borrow`
+- **Per-position debt tracking**: Each position accrues compound interest individually (instead of uniform scaling)
+- **Linear price interpolation**: Realistic hourly price movement in simulations
+- **Strict price validation**: Raises exception on missing price data (no silent fallback)
+- **Preserved debt after rebalancing**: Accumulated interest is maintained when redistributing positions
