@@ -347,6 +347,7 @@ https://api.v3.aave.com/graphql
 - **Collateral Model**: Global pool - any enabled asset can be collateral
 - **collateral_asset_symbol = "MULTI"**: Indicates any enabled collateral works
 - **Data Format**: API returns values already in decimal format (no RAY/WAD conversion needed)
+- **Historical Data**: Available via `supplyAPYHistory` and `borrowAPYHistory` queries
 
 **Mapping Aave to Market model:**
 | Aave Reserve | Market Model |
@@ -412,10 +413,19 @@ https://api.v3.aave.com/graphql
 - Reserve-centric model: each reserve maps to a Market with `collateral_asset_symbol = "MULTI"`
 - API returns decimal values directly (no RAY/WAD conversion needed)
 - Market ID format: `{chain_id}-{token_address}`
-- Full test coverage in `tests/unit/test_aave_api.py` (23 tests)
+- **Historical data support**: `supplyAPYHistory` and `borrowAPYHistory` queries
+- Time windows: LAST_DAY, LAST_WEEK, LAST_MONTH, LAST_SIX_MONTHS, LAST_YEAR
+- Full test coverage in `tests/unit/test_aave_api.py` (34 tests)
+
+**UI Changes:**
+- Added Aave tab in Lending & Borrowing screen
+- Markets table now shows: Market ID, Loan, Collat, LLTV, Supply, **Borrow**, Util
+- Removed "Created" column (not available from APIs)
+- History (H) button works for Aave markets (uses Aave API, no Alchemy needed)
 
 **Key files:**
-- `src/data/clients/aave/client.py` - AaveClient
+- `src/data/clients/aave/client.py` - AaveClient with historical data
 - `src/data/clients/aave/parser.py` - Response parsing
-- `src/protocols/aave/config.py` - Rate limits, URLs
-- `src/protocols/aave/queries.py` - GraphQL queries
+- `src/protocols/aave/config.py` - Rate limits, URLs, pool addresses
+- `src/protocols/aave/queries.py` - GraphQL queries (markets + APY history)
+- `src/ui/screens/lending/aave.py` - Aave lending screen
