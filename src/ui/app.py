@@ -10,6 +10,7 @@ from textual.widgets import Header, Footer, Static, DataTable, TabbedContent, Ta
 
 from config.settings import get_settings
 from src.data.pipeline import DataPipeline
+from src.data.sources.risk_free_rates import prefetch_risk_free_rates
 from src.ui.screens.lending.category import LendingCategoryScreen
 from src.ui.screens.sandbox import SandboxScreen
 
@@ -107,6 +108,12 @@ class DeFiTrackerApp(App):
 
     async def on_mount(self) -> None:
         """Initialize after app is mounted."""
+        # Pre-fetch risk-free rates for Sharpe/Sortino calculations
+        try:
+            await prefetch_risk_free_rates()
+        except Exception as e:
+            logger.warning(f"Failed to prefetch risk-free rates: {e}")
+
         lending_screen = self.query_one("#lending-screen", LendingCategoryScreen)
         await lending_screen.initialize()
 

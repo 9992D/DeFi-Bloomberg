@@ -1,11 +1,12 @@
 """Simulation result models."""
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import List, Optional, Dict, Any
 
 from .position import SimulatedPosition
+from src.data.sources.risk_free_rates import get_risk_free_rate_sync
 
 
 @dataclass
@@ -70,8 +71,8 @@ class SimulationMetrics:
     # Risk metrics
     max_drawdown: Decimal           # Maximum drawdown %
     volatility: Decimal             # Annualized volatility of returns
-    sharpe_ratio: Decimal           # Sharpe ratio (0% risk-free)
-    sortino_ratio: Decimal          # Sortino ratio
+    sharpe_ratio: Decimal           # Sharpe ratio (with dynamic risk-free rate)
+    sortino_ratio: Decimal          # Sortino ratio (with dynamic risk-free rate)
 
     # Health factor stats
     avg_health_factor: Decimal
@@ -90,6 +91,9 @@ class SimulationMetrics:
     simulation_days: int
     data_points: int
 
+    # Risk-free rate used (with default for backward compatibility)
+    risk_free_rate: Decimal = Decimal("0")
+
     def to_dict(self) -> dict:
         return {
             "total_return": str(self.total_return),
@@ -99,6 +103,7 @@ class SimulationMetrics:
             "volatility": str(self.volatility),
             "sharpe_ratio": str(self.sharpe_ratio),
             "sortino_ratio": str(self.sortino_ratio),
+            "risk_free_rate": str(self.risk_free_rate),
             "avg_health_factor": str(self.avg_health_factor),
             "min_health_factor": str(self.min_health_factor),
             "max_health_factor": str(self.max_health_factor),
@@ -132,6 +137,10 @@ class SimulationResult:
     # Final position
     final_position: Optional[SimulatedPosition] = None
 
+    # Loan asset for risk-free rate calculation (with defaults for backward compatibility)
+    loan_asset_address: str = ""
+    loan_asset_symbol: str = ""
+
     # Time series data
     points: List[SimulationPoint] = field(default_factory=list)
 
@@ -148,7 +157,7 @@ class SimulationResult:
 
     def __post_init__(self):
         if self.created_at is None:
-            self.created_at = datetime.utcnow()
+            self.created_at = datetime.now(timezone.utc)
 
     @property
     def duration_days(self) -> int:
@@ -227,19 +236,30 @@ class SimulationResult:
         sharpe = Decimal("0")
         sortino = Decimal("0")
 
+        # Get dynamic risk-free rate based on loan asset
+        risk_free_rate_decimal = 0.0
+        if self.loan_asset_address or self.loan_asset_symbol:
+            risk_free_rate_decimal, _ = get_risk_free_rate_sync(
+                loan_asset_address=self.loan_asset_address,
+                loan_asset_symbol=self.loan_asset_symbol,
+            )
+        risk_free_rate_pct = risk_free_rate_decimal * 100  # Convert to percentage
+
         if len(returns) > 1:
             vol = Decimal(str(statistics.stdev(returns)))
             ann_vol = vol * Decimal(str(365 ** 0.5))
 
             if ann_vol > 0:
-                sharpe = Decimal(str(annualized)) / ann_vol
+                # Sharpe = (annualized return - risk-free rate) / volatility
+                excess_return = annualized - risk_free_rate_pct
+                sharpe = Decimal(str(excess_return)) / ann_vol
 
-                # Sortino (downside only)
-                downside = [r for r in returns if r < 0]
+                # Sortino (downside only, below risk-free rate)
+                downside = [r for r in returns if r < risk_free_rate_pct / 365]  # Daily risk-free
                 if len(downside) > 1:
                     down_vol = Decimal(str(statistics.stdev(downside))) * Decimal(str(365 ** 0.5))
                     if down_vol > 0:
-                        sortino = Decimal(str(annualized)) / down_vol
+                        sortino = Decimal(str(excess_return)) / down_vol
 
         # Health factor stats
         hf_values = [float(p.health_factor) for p in self.points if p.health_factor < 100]
@@ -264,6 +284,7 @@ class SimulationResult:
             volatility=vol,
             sharpe_ratio=sharpe,
             sortino_ratio=sortino,
+            risk_free_rate=Decimal(str(risk_free_rate_pct)),
             avg_health_factor=avg_hf,
             min_health_factor=min_hf,
             max_health_factor=max_hf,
@@ -284,6 +305,8 @@ class SimulationResult:
             "strategy_type": self.strategy_type,
             "market_id": self.market_id,
             "initial_capital": str(self.initial_capital),
+            "loan_asset_address": self.loan_asset_address,
+            "loan_asset_symbol": self.loan_asset_symbol,
             "start_time": self.start_time.isoformat(),
             "end_time": self.end_time.isoformat(),
             "final_position": self.final_position.to_dict() if self.final_position else None,

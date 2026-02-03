@@ -34,6 +34,17 @@ Simulate vault allocation strategies across multiple Morpho markets.
 - Performance metrics: Return, Sharpe, Max Drawdown
 - Charts: PnL evolution, Excess return, Weighted APY
 
+### 💰 Debt Rebalancing Optimizer
+Optimize debt positions across multiple lending markets to minimize borrowing costs while maintaining safe health factors.
+
+**Features:**
+- Accurate Health Factor calculation: `HF = (collateral × price × LLTV) / borrow`
+- Per-position debt tracking with individual compound interest
+- Linear price interpolation for realistic hourly simulation
+- Dynamic rebalancing based on rate changes
+- Risk analysis with price scenario modeling (5%-30% drops)
+- Margin call detection and tracking
+
 ## Architecture
 
 ```
@@ -148,10 +159,23 @@ UI_REFRESH_INTERVAL=60
 | KPI | Description |
 |-----|-------------|
 | Volatility | Annualized rate volatility |
-| Sharpe Ratio | Risk-adjusted return (0% risk-free rate) |
-| Sortino Ratio | Downside-only risk adjustment |
+| Sharpe Ratio | Risk-adjusted return with dynamic risk-free rates |
+| Sortino Ratio | Downside-only risk adjustment with dynamic risk-free rates |
 | Mean Reversion | Ornstein-Uhlenbeck half-life |
 | Utilization-Adjusted Return | Yield penalized by utilization risk |
+
+### Dynamic Risk-Free Rates
+
+Sharpe and Sortino ratios use contextually appropriate risk-free rates based on the asset type:
+
+| Asset Type | Risk-Free Rate Source |
+|------------|----------------------|
+| Stablecoins (USDC, USDT, DAI, etc.) | US Treasury Bills rate (FRED API) |
+| ETH / WETH | Lido staking APR |
+| wstETH | 0% (inherent staking yield) |
+| Other tokens | 0% |
+
+Risk-free rates are prefetched at application startup and cached for 1 hour to minimize API calls.
 
 ## Tech Stack
 
@@ -179,6 +203,22 @@ UI_REFRESH_INTERVAL=60
 │ 1: Morpho  2: Sandbox | M: Markets  V: Vaults | R: Refresh  │
 └─────────────────────────────────────────────────────────────┘
 ```
+
+## Recent Improvements
+
+### Dynamic Risk-Free Rates for Sharpe/Sortino (v1.1)
+- Stablecoins (USDC, USDT, DAI, etc.) use US T-bills rate from FRED API
+- ETH/WETH uses Lido staking APR as the opportunity cost
+- wstETH uses 0% (already includes staking yield)
+- Other tokens default to 0%
+- Rates are prefetched at app startup and cached for 1 hour
+
+### Debt Optimizer Enhancements (v1.1)
+- **Fixed Health Factor calculation**: Now uses correct formula `HF = (collateral × price × LLTV) / borrow`
+- **Per-position debt tracking**: Individual compound interest calculation instead of uniform scaling
+- **Linear price interpolation**: Realistic hourly simulation with interpolated prices between data points
+- **Proper error handling**: Raises exception when price data is missing instead of silent fallback
+- **Preserved accumulated debt**: Debt properly persists after rebalancing events
 
 ## Contributing
 

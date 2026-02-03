@@ -15,6 +15,7 @@ from rich.text import Text
 from config.settings import get_settings
 from src.core.models import Vault, VaultTimeseriesPoint
 from src.data.pipeline import DataPipeline
+from src.data.sources.risk_free_rates import get_risk_free_rate_sync
 
 logger = logging.getLogger(__name__)
 
@@ -281,12 +282,21 @@ class VaultHistoricalScreen(Screen):
                         output.append(f"Max Drawdown: ", style="dim")
                         output.append(f"-{max_dd:.2f}%\n", style=dd_color)
 
-                        # Sharpe ratio (with 0% risk-free, it's return/volatility)
+                        # Sharpe ratio with dynamic risk-free rate
                         if ann_vol > 0 and period_days > 0:
-                            sharpe = implied_apy / ann_vol
+                            # Get risk-free rate based on vault's underlying asset
+                            risk_free_rate, rate_type = get_risk_free_rate_sync(
+                                loan_asset_address=self.vault.asset_address,
+                                loan_asset_symbol=self.vault.asset_symbol,
+                            )
+                            risk_free_pct = risk_free_rate * 100  # Convert to percentage
+
+                            excess_return = implied_apy - risk_free_pct
+                            sharpe = excess_return / ann_vol
                             sharpe_color = "green" if sharpe > 0 else "red"
                             output.append(f"Sharpe Ratio: ", style="dim")
                             output.append(f"{sharpe:.2f}\n", style=sharpe_color)
+                            output.append(f"  (Rf: {risk_free_pct:.1f}% {rate_type})\n", style="dim italic")
 
             # Current APY from API (for reference)
             output.append(f"\n── Current Rates ──\n", style="bold cyan")

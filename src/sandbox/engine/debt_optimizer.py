@@ -89,13 +89,20 @@ class DebtRebalancingOptimizer:
         """Get collateral and loan prices from market data.
 
         Returns: (collateral_price_usd, loan_price_usd)
+
+        Raises:
+            ValueError: If no valid price data is available
         """
         # Get prices from first available market in cache
         for market in markets:
             m = self._get_cached_market(market.market_id)
-            if m:
+            if m and m.collateral_asset_price_usd > 0 and m.loan_asset_price_usd > 0:
                 return (m.collateral_asset_price_usd, m.loan_asset_price_usd)
-        return (Decimal("1"), Decimal("1"))  # Fallback
+
+        # No fallback - raise exception for missing price data
+        raise ValueError(
+            "No valid price data available. Ensure markets are cached with valid prices."
+        )
 
     async def optimize(
         self,
@@ -424,7 +431,8 @@ class DebtRebalancingOptimizer:
         collateral_value_usd = config.collateral_amount * collateral_price_usd
         borrow_amount_usd = collateral_value_usd * config.initial_ltv
         # Convert to loan tokens (e.g., USDC amount = USD / $1.00)
-        total_borrow = borrow_amount_usd / loan_price_usd if loan_price_usd > 0 else borrow_amount_usd
+        # Note: loan_price_usd is guaranteed > 0 by _get_collateral_price validation
+        total_borrow = borrow_amount_usd / loan_price_usd
         remaining_debt = total_borrow
 
         # Filter markets where our LTV is safe (below 95% of LLTV)
@@ -481,7 +489,8 @@ class DebtRebalancingOptimizer:
 
         # Use real collateral price (relative to loan asset)
         # collateral_price = collateral_usd / loan_usd (e.g., WBTC/USDC = 80000)
-        collateral_price = collateral_price_usd / loan_price_usd if loan_price_usd > 0 else collateral_price_usd
+        # Note: loan_price_usd is guaranteed > 0 by _get_collateral_price validation
+        collateral_price = collateral_price_usd / loan_price_usd
 
         for market_id, debt_amount in allocation.items():
             market = market_lookup.get(market_id)
@@ -640,11 +649,14 @@ class DebtRebalancingOptimizer:
             weighted_apy /= total_weight
 
         # Current price of collateral in loan asset terms (e.g., WBTC/USDC = 80000)
-        current_price = collateral_price_usd / loan_price_usd if loan_price_usd > 0 else collateral_price_usd
+        # Note: loan_price_usd is guaranteed > 0 by _get_collateral_price validation
+        current_price = collateral_price_usd / loan_price_usd
 
-        # Calculate aggregated risk metrics
+        # Calculate aggregated risk metrics using correct HF formula:
+        # HF = (collateral_value × LLTV) / borrow_amount
         current_ltv = config.initial_ltv
-        hf = weighted_lltv / current_ltv if current_ltv > 0 else Decimal("999")
+        collateral_value = total_collateral * current_price
+        hf = (collateral_value * weighted_lltv) / total_borrow if total_borrow > 0 else Decimal("999")
 
         # Liquidation price
         liq_price = (total_borrow) / (total_collateral * weighted_lltv) if total_collateral > 0 and weighted_lltv > 0 else Decimal("0")
@@ -881,6 +893,73 @@ class DebtRebalancingOptimizer:
 
         return aligned
 
+    def _interpolate_price(
+        self,
+        ts: datetime,
+        timestamps: List[datetime],
+        price_history: Dict[datetime, Decimal],
+        initial_price: Decimal,
+    ) -> Decimal:
+        """Interpolate price linearly between known data points.
+
+        If price_history is empty or ts is outside range, simulates
+        price movement with small linear drift.
+        """
+        if not price_history:
+            # No history - simulate linear price movement
+            # Small drift based on hours elapsed (more realistic than day-based)
+            if timestamps:
+                hours_elapsed = (ts - timestamps[0]).total_seconds() / 3600
+                # Simulate ±1% monthly drift = ±0.00139% per hour
+                drift_per_hour = Decimal("0.0000139")
+                # Use sin-like pattern for oscillation
+                import math
+                oscillation = Decimal(str(math.sin(hours_elapsed / 24 * math.pi)))
+                drift = drift_per_hour * Decimal(str(hours_elapsed)) * oscillation
+                return initial_price * (Decimal("1") + drift)
+            return initial_price
+
+        # If exact timestamp exists, return it
+        if ts in price_history:
+            return price_history[ts]
+
+        # Find surrounding timestamps for interpolation
+        sorted_ts = sorted(price_history.keys())
+
+        # Before first known price
+        if ts < sorted_ts[0]:
+            return price_history[sorted_ts[0]]
+
+        # After last known price
+        if ts > sorted_ts[-1]:
+            return price_history[sorted_ts[-1]]
+
+        # Find bracketing timestamps
+        prev_ts = sorted_ts[0]
+        next_ts = sorted_ts[-1]
+
+        for i, known_ts in enumerate(sorted_ts):
+            if known_ts > ts:
+                next_ts = known_ts
+                prev_ts = sorted_ts[i - 1] if i > 0 else known_ts
+                break
+
+        # Linear interpolation
+        if prev_ts == next_ts:
+            return price_history[prev_ts]
+
+        prev_price = price_history[prev_ts]
+        next_price = price_history[next_ts]
+
+        # t = (ts - prev) / (next - prev)
+        total_seconds = (next_ts - prev_ts).total_seconds()
+        elapsed_seconds = (ts - prev_ts).total_seconds()
+        t = Decimal(str(elapsed_seconds / total_seconds)) if total_seconds > 0 else Decimal("0")
+
+        # interpolated = prev + t * (next - prev)
+        interpolated_price = prev_price + t * (next_price - prev_price)
+        return interpolated_price
+
     def _simulate_with_rebalancing(
         self,
         aligned_data: Dict[datetime, Dict[str, TimeseriesPoint]],
@@ -914,8 +993,10 @@ class DebtRebalancingOptimizer:
         _, initial_positions = self._calculate_optimal_allocation(markets, config)
         current_positions = {p.market_id: p for p in initial_positions}
 
-        # Initialize debt tracking (debt grows with compound interest)
-        initial_debt = sum(p.borrow_amount for p in initial_positions)
+        # Initialize per-position debt tracking (each position accrues interest independently)
+        # This is more accurate than uniform scaling after rebalancing
+        position_debts: Dict[str, Decimal] = {p.market_id: p.borrow_amount for p in initial_positions}
+        initial_debt = sum(position_debts.values())
         current_debt = initial_debt
 
         cumulative_interest = Decimal("0")
@@ -939,16 +1020,13 @@ class DebtRebalancingOptimizer:
         for i, ts in enumerate(timestamps):
             market_points = aligned_data[ts]
 
-            # Get current collateral price (from history or simulated)
-            if price_history and ts in price_history:
-                current_price = price_history[ts]
-            else:
-                # Use initial price with small random-like variation based on timestamp
-                # This provides price movement even without historical data
-                day_offset = (ts - timestamps[0]).days if timestamps else 0
-                # Simulate slight price drift (±2% volatility per 30 days)
-                volatility_factor = Decimal("1") + (Decimal(str(day_offset % 10)) - Decimal("5")) * Decimal("0.002")
-                current_price = initial_price * volatility_factor
+            # Get current collateral price with linear interpolation
+            current_price = self._interpolate_price(
+                ts=ts,
+                timestamps=timestamps,
+                price_history=price_history or {},
+                initial_price=initial_price,
+            )
 
             # Update rate history
             for market_id, point in market_points.items():
@@ -958,20 +1036,23 @@ class DebtRebalancingOptimizer:
                     if len(rate_history[market_id]) > config.lookback_periods:
                         rate_history[market_id] = rate_history[market_id][-config.lookback_periods:]
 
-            # Calculate compound interest on debt
+            # Calculate compound interest per position (more accurate than uniform scaling)
             if i > 0:
                 hours_elapsed = (ts - timestamps[i-1]).total_seconds() / 3600
-                weighted_rate = sum(
-                    current_positions[mid].borrow_apy * current_positions[mid].allocation_weight
-                    for mid in current_positions
-                    if mid in market_points
-                ) if current_positions else Decimal("0")
+                period_interest = Decimal("0")
 
-                # Compound interest: debt(t) = debt(t-1) * (1 + rate * dt)
-                period_rate = weighted_rate * Decimal(str(hours_elapsed / 8760))
-                interest_accrued = current_debt * period_rate
-                current_debt += interest_accrued
-                cumulative_interest += interest_accrued
+                for market_id in list(position_debts.keys()):
+                    if market_id in market_points:
+                        # Get current rate for this market
+                        current_rate = market_points[market_id].borrow_apy
+                        # Compound interest: debt(t) = debt(t-1) * (1 + rate * dt)
+                        period_rate = current_rate * Decimal(str(hours_elapsed / 8760))
+                        interest = position_debts[market_id] * period_rate
+                        position_debts[market_id] += interest
+                        period_interest += interest
+
+                current_debt = sum(position_debts.values())
+                cumulative_interest += period_interest
 
             # Update positions with current rates and recalculate HF
             updated_positions = []
@@ -984,20 +1065,22 @@ class DebtRebalancingOptimizer:
                     market = market_lookup.get(market_id)
                     lltv = market.lltv if market else Decimal("0.86")
 
+                    # Use actual tracked debt for this position (with compound interest)
+                    actual_borrow = position_debts.get(market_id, position.borrow_amount)
+
                     # Recalculate health factor with current price
                     # HF = (collateral * price * LLTV) / borrow
-                    scaled_borrow = position.borrow_amount * (current_debt / initial_debt) if initial_debt > 0 else position.borrow_amount
                     collateral_value = position.collateral_amount * current_price
-                    hf = (collateral_value * lltv) / scaled_borrow if scaled_borrow > 0 else Decimal("999")
+                    hf = (collateral_value * lltv) / actual_borrow if actual_borrow > 0 else Decimal("999")
 
                     # Recalculate liquidation price
-                    liq_price = scaled_borrow / (position.collateral_amount * lltv) if position.collateral_amount > 0 and lltv > 0 else Decimal("0")
+                    liq_price = actual_borrow / (position.collateral_amount * lltv) if position.collateral_amount > 0 and lltv > 0 else Decimal("0")
 
                     position = DebtPosition(
                         market_id=position.market_id,
                         market_name=position.market_name,
                         collateral_amount=position.collateral_amount,
-                        borrow_amount=scaled_borrow,
+                        borrow_amount=actual_borrow,
                         borrow_apy=point.borrow_apy,
                         health_factor=hf,
                         liquidation_price=liq_price,
@@ -1041,15 +1124,67 @@ class DebtRebalancingOptimizer:
                     cumulative_rebalance_cost += config.gas_cost_usd
                     last_rebalance_ts = ts
 
-                    # Update market info with current rates and recalculate
-                    for market in markets:
-                        if market.market_id in market_points:
-                            market.borrow_apy = market_points[market.market_id].borrow_apy
-                            market.utilization = market_points[market.market_id].utilization
+                    # Preserve total accumulated debt before rebalancing
+                    total_accumulated_debt = sum(position_debts.values())
 
-                    _, new_positions = self._calculate_optimal_allocation(markets, config)
-                    current_positions = {p.market_id: p for p in new_positions}
+                    # Create a copy of markets with current rates (avoid mutating original)
+                    markets_copy = []
+                    for market in markets:
+                        market_copy = MarketDebtInfo(
+                            market_id=market.market_id,
+                            market_name=market.market_name,
+                            collateral_symbol=market.collateral_symbol,
+                            loan_symbol=market.loan_symbol,
+                            collateral_address=market.collateral_address,
+                            loan_address=market.loan_address,
+                            borrow_apy=market_points[market.market_id].borrow_apy if market.market_id in market_points else market.borrow_apy,
+                            supply_apy=market.supply_apy,
+                            utilization=market_points[market.market_id].utilization if market.market_id in market_points else market.utilization,
+                            lltv=market.lltv,
+                            available_liquidity=market.available_liquidity,
+                            total_borrow=market.total_borrow,
+                            tvl=market.tvl,
+                            effective_max_leverage=market.effective_max_leverage,
+                            safe_leverage_at_lltv=market.safe_leverage_at_lltv,
+                            rate_volatility_24h=market.rate_volatility_24h,
+                            rate_trend=market.rate_trend,
+                            predicted_rate_1d=market.predicted_rate_1d,
+                            predicted_rate_7d=market.predicted_rate_7d,
+                            score=market.score,
+                            rate_score=market.rate_score,
+                            risk_score=market.risk_score,
+                            liquidity_score=market.liquidity_score,
+                        )
+                        markets_copy.append(market_copy)
+
+                    _, new_positions = self._calculate_optimal_allocation(markets_copy, config)
+
+                    # Redistribute the accumulated debt proportionally to new allocations
+                    # (instead of using initial debt amounts from _calculate_optimal_allocation)
+                    new_total_debt = sum(p.borrow_amount for p in new_positions)
+                    position_debts.clear()
+                    current_positions.clear()
+
+                    for pos in new_positions:
+                        # Scale position's debt by the ratio of accumulated to initial
+                        scaled_debt = pos.borrow_amount * (total_accumulated_debt / new_total_debt) if new_total_debt > 0 else pos.borrow_amount
+                        position_debts[pos.market_id] = scaled_debt
+
+                        # Update position with scaled debt
+                        scaled_pos = DebtPosition(
+                            market_id=pos.market_id,
+                            market_name=pos.market_name,
+                            collateral_amount=pos.collateral_amount,
+                            borrow_amount=scaled_debt,
+                            borrow_apy=pos.borrow_apy,
+                            health_factor=pos.health_factor,
+                            liquidation_price=pos.liquidation_price,
+                            allocation_weight=pos.allocation_weight,
+                        )
+                        current_positions[pos.market_id] = scaled_pos
+
                     updated_positions = list(current_positions.values())
+                    current_debt = total_accumulated_debt
 
             snapshot = RebalancingSnapshot(
                 timestamp=ts,
@@ -1232,13 +1367,13 @@ class DebtRebalancingOptimizer:
         for i, ts in enumerate(timestamps):
             market_points = aligned_data[ts]
 
-            # Get current price
-            if price_history and ts in price_history:
-                current_price = price_history[ts]
-            else:
-                day_offset = (ts - timestamps[0]).days if timestamps else 0
-                volatility_factor = Decimal("1") + (Decimal(str(day_offset % 10)) - Decimal("5")) * Decimal("0.002")
-                current_price = initial_price * volatility_factor
+            # Get current price with linear interpolation
+            current_price = self._interpolate_price(
+                ts=ts,
+                timestamps=timestamps,
+                price_history=price_history or {},
+                initial_price=initial_price,
+            )
 
             # Update rate if data available
             current_rate = position.borrow_apy

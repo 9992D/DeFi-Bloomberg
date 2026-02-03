@@ -1,7 +1,7 @@
 """Vault allocation simulator with rebalancing strategies."""
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import List, Dict, Optional, Tuple
 import statistics
@@ -16,6 +16,7 @@ from src.sandbox.models.allocation import (
 )
 from src.sandbox.data import DataAggregator
 from src.core.models import Market, TimeseriesPoint
+from src.data.sources.risk_free_rates import get_risk_free_rate_sync
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +34,27 @@ class AllocationSimulator:
     def __init__(self, data: DataAggregator):
         self.data = data
         self._market_cache: Dict[str, Market] = {}
+
+    def _get_risk_free_rate(self) -> float:
+        """
+        Get risk-free rate based on loan asset of cached markets.
+
+        Uses the first market's loan asset to determine the appropriate rate:
+        - Stablecoins → T-bills rate
+        - ETH/WETH → Lido staking rate
+        - wstETH/staked ETH → 0% (inherent yield)
+        - Other → 0%
+        """
+        if not self._market_cache:
+            return 0.0
+
+        # Use the first cached market's loan asset
+        first_market = next(iter(self._market_cache.values()))
+        rate, _ = get_risk_free_rate_sync(
+            loan_asset_address=first_market.loan_asset,
+            loan_asset_symbol=first_market.loan_asset_symbol,
+        )
+        return rate
     
     async def run_simulation(
         self,
@@ -59,8 +81,8 @@ class AllocationSimulator:
         if not markets_data:
             return AllocationResult(
                 config=config,
-                start_time=datetime.utcnow(),
-                end_time=datetime.utcnow(),
+                start_time=datetime.now(timezone.utc),
+                end_time=datetime.now(timezone.utc),
                 success=False,
                 error_message="No market data available",
             )
@@ -71,8 +93,8 @@ class AllocationSimulator:
         if not aligned_data:
             return AllocationResult(
                 config=config,
-                start_time=datetime.utcnow(),
-                end_time=datetime.utcnow(),
+                start_time=datetime.now(timezone.utc),
+                end_time=datetime.now(timezone.utc),
                 success=False,
                 error_message="Could not align market timeseries",
             )
@@ -500,9 +522,11 @@ class AllocationSimulator:
         period_returns = [returns[i] - returns[i-1] for i in range(1, len(returns))]
         vol = Decimal(str(statistics.stdev(period_returns))) if len(period_returns) > 1 else Decimal("0")
         ann_vol = vol * Decimal(str((365 * 24) ** 0.5))  # Assuming hourly data
-        
-        # Sharpe
-        sharpe = Decimal(str(annualized)) / ann_vol if ann_vol > 0 else Decimal("0")
+
+        # Sharpe with dynamic risk-free rate
+        risk_free_rate = self._get_risk_free_rate() * 100  # Convert to percentage
+        excess_return = annualized - risk_free_rate
+        sharpe = Decimal(str(excess_return)) / ann_vol if ann_vol > 0 else Decimal("0")
         
         # Max drawdown
         peak = returns[0]

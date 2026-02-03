@@ -66,6 +66,11 @@ class StrategySimulator:
 
         logger.info(f"Starting simulation: {config.name}, {days} days, {interval} interval")
 
+        # Get market info for loan asset (needed for risk-free rate)
+        market = await self.data.get_market(config.protocol, config.market_id)
+        loan_asset_address = market.loan_asset if market else ""
+        loan_asset_symbol = market.loan_asset_symbol if market else ""
+
         # Get market snapshots
         snapshots = await self.data.get_market_snapshots(
             protocol=config.protocol,
@@ -80,6 +85,8 @@ class StrategySimulator:
                 strategy_type=config.strategy_type.value,
                 market_id=config.market_id,
                 initial_capital=config.initial_capital,
+                loan_asset_address=loan_asset_address,
+                loan_asset_symbol=loan_asset_symbol,
                 start_time=datetime.now(tz=timezone.utc),
                 end_time=datetime.now(tz=timezone.utc),
                 success=False,
@@ -106,6 +113,8 @@ class StrategySimulator:
                 strategy_type=config.strategy_type.value,
                 market_id=config.market_id,
                 initial_capital=config.initial_capital,
+                loan_asset_address=loan_asset_address,
+                loan_asset_symbol=loan_asset_symbol,
                 start_time=first_snapshot.timestamp,
                 end_time=snapshots[-1].timestamp,
                 success=False,
@@ -147,6 +156,8 @@ class StrategySimulator:
             strategy_type=config.strategy_type.value,
             market_id=config.market_id,
             initial_capital=config.initial_capital,
+            loan_asset_address=loan_asset_address,
+            loan_asset_symbol=loan_asset_symbol,
             start_time=start_time,
             end_time=points[-1].timestamp if points else start_time,
             final_position=position,

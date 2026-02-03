@@ -15,6 +15,7 @@ from rich.text import Text
 from config.settings import Settings
 from src.core.models import Vault
 from src.data.pipeline import DataPipeline
+from src.data.sources.risk_free_rates import get_risk_free_rate_sync
 from src.ui.screens.vault_historical import VaultHistoricalScreen
 
 logger = logging.getLogger(__name__)
@@ -465,22 +466,32 @@ class VaultsScreen(Widget):
                     dd_color = "red" if max_dd > 5 else "yellow" if max_dd > 1 else "green"
                     output.append(f"-{max_dd:.2f}%\n", style=dd_color)
 
-                    # Sharpe Ratio (with 0% risk-free, it's simply return/volatility)
+                    # Sharpe Ratio with dynamic risk-free rate based on vault asset
                     if ann_vol > 0 and timeseries:
                         days = (timeseries[-1].timestamp - timeseries[0].timestamp).days or 1
                         annualized = ((1 + total_return / 100) ** (365 / days) - 1) * 100
 
-                        sharpe = annualized / ann_vol
+                        # Get risk-free rate based on vault's underlying asset
+                        risk_free_rate, rate_type = get_risk_free_rate_sync(
+                            loan_asset_address=vault.asset_address,
+                            loan_asset_symbol=vault.asset_symbol,
+                        )
+                        risk_free_pct = risk_free_rate * 100  # Convert to percentage
+
+                        excess_return = annualized - risk_free_pct
+                        sharpe = excess_return / ann_vol
                         output.append(f"\nSharpe Ratio: ", style="dim")
                         sharpe_color = "green" if sharpe > 0 else "red"
                         output.append(f"{sharpe:.2f}\n", style=sharpe_color)
+                        output.append(f"  (Rf: {risk_free_pct:.1f}% {rate_type})\n", style="dim italic")
 
-                        # Sortino Ratio (only downside volatility)
-                        downside_returns = [r for r in returns if r < 0]
+                        # Sortino Ratio (only downside volatility, below risk-free rate)
+                        daily_rf = risk_free_pct / 365  # Daily risk-free rate
+                        downside_returns = [r for r in returns if r < daily_rf]
                         if len(downside_returns) > 1:
                             downside_vol = statistics.stdev(downside_returns) * (365 ** 0.5)
                             if downside_vol > 0:
-                                sortino = annualized / downside_vol
+                                sortino = excess_return / downside_vol
                                 output.append(f"Sortino Ratio: ", style="dim")
                                 sortino_color = "green" if sortino > 0 else "red"
                                 output.append(f"{sortino:.2f}\n", style=sortino_color)
