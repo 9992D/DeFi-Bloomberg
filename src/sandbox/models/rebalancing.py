@@ -22,6 +22,9 @@ class MarketDebtInfo:
     collateral_symbol: str
     loan_symbol: str
 
+    # Protocol identifier (morpho, aave) - useful for cross-protocol rebalancing
+    protocol: str = "morpho"
+
     # Asset addresses for precise matching
     collateral_address: str = ""
     loan_address: str = ""
@@ -62,6 +65,7 @@ class MarketDebtInfo:
             "market_name": self.market_name,
             "collateral_symbol": self.collateral_symbol,
             "loan_symbol": self.loan_symbol,
+            "protocol": self.protocol,
             "collateral_address": self.collateral_address,
             "loan_address": self.loan_address,
             "borrow_apy": str(self.borrow_apy),
@@ -310,8 +314,15 @@ class RebalancingConfig:
     collateral_amount: Decimal  # Amount of collateral in tokens
     initial_ltv: Decimal        # Target LTV (0.70 = 70%)
 
-    # Protocol (Morpho only for v1)
+    # Protocol (morpho or aave)
     protocol: str = "morpho"
+
+    # For Aave: the actual collateral asset being used
+    # Aave markets have collateral_asset="" and collateral_asset_symbol="MULTI"
+    # because any enabled asset can serve as collateral in Aave's global pool model.
+    # This field specifies which asset the user actually has as collateral.
+    # For Morpho: leave empty (uses collateral_asset which is explicit per market)
+    actual_collateral_asset: str = ""
 
     # Rebalancing mode
     rebalancing_mode: RebalancingMode = RebalancingMode.DYNAMIC_RATE
@@ -352,10 +363,37 @@ class RebalancingConfig:
         """Check if config uses address-based matching."""
         return self.collateral_asset.startswith("0x") and self.borrow_asset.startswith("0x")
 
+    @property
+    def effective_collateral_asset(self) -> str:
+        """Return the effective collateral asset for price calculations.
+
+        For Aave: returns actual_collateral_asset (user-specified)
+        For Morpho: returns collateral_asset (market-explicit)
+        """
+        return self.actual_collateral_asset or self.collateral_asset
+
+    @property
+    def is_aave(self) -> bool:
+        """Check if this config is for Aave protocol."""
+        return self.protocol.lower() == "aave"
+
+    @property
+    def is_cross_protocol(self) -> bool:
+        """Check if this config is for cross-protocol rebalancing."""
+        return self.protocol.lower() == "cross"
+
+    @property
+    def protocols(self) -> list:
+        """Return list of protocols to use for market discovery."""
+        if self.is_cross_protocol:
+            return ["morpho", "aave"]
+        return [self.protocol.lower()]
+
     def to_dict(self) -> dict:
         return {
             "collateral_asset": self.collateral_asset,
             "borrow_asset": self.borrow_asset,
+            "actual_collateral_asset": self.actual_collateral_asset,
             "collateral_amount": str(self.collateral_amount),
             "initial_ltv": str(self.initial_ltv),
             "total_debt": str(self.total_debt),
@@ -380,6 +418,7 @@ class RebalancingConfig:
         return cls(
             collateral_asset=data["collateral_asset"],
             borrow_asset=data["borrow_asset"],
+            actual_collateral_asset=data.get("actual_collateral_asset", ""),
             collateral_amount=Decimal(data["collateral_amount"]),
             initial_ltv=Decimal(data["initial_ltv"]),
             protocol=data.get("protocol", "morpho"),

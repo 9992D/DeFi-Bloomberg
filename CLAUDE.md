@@ -375,7 +375,26 @@ https://api.v3.aave.com/graphql
 
 ## Recent Changes
 
-### Dynamic Risk-Free Rates (Latest)
+### Debt Optimizer: Aave & Cross-Protocol Support (Latest)
+- **Aave integration**: Debt optimizer now supports Aave v3 protocol
+- **Cross-protocol rebalancing**: New "Cross-Protocol" mode fetches markets from both Morpho and Aave
+- Protocol selector in UI: Morpho Blue, Aave v3, or Cross-Protocol
+- Markets table shows "Proto" column (M/A) in cross-protocol mode
+- Proper handling of Aave's MULTI collateral model (matches only on loan asset)
+
+**Key files:**
+- `src/protocols/aave/assets.py` - Aave collateral/borrow asset addresses
+- `src/sandbox/models/rebalancing.py` - Added `actual_collateral_asset`, `is_cross_protocol`, `protocols` properties
+- `src/sandbox/engine/debt_optimizer.py` - Multi-protocol market discovery and price lookup
+- `src/sandbox/data/aggregator.py` - Fixed protocol type conversion for proper API routing
+- `src/ui/screens/debt_optimizer.py` - Protocol selector and dynamic asset options
+
+**Bug fixes:**
+- Fixed duplicate row key error in Aave markets (deduplicate by market ID)
+- Fixed DataAggregator not passing protocol type to pipeline (always used Morpho)
+- Fixed table column duplication on refresh (`table.clear(columns=True)`)
+
+### Dynamic Risk-Free Rates
 - Sharpe/Sortino now use asset-specific risk-free rates
 - Stablecoins: T-bills rate from FRED API (~5%)
 - WETH/ETH: Lido staking APR (~3.5%)

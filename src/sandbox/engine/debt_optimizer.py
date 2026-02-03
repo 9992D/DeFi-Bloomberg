@@ -85,15 +85,43 @@ class DebtRebalancingOptimizer:
     def _get_collateral_price(
         self,
         markets: List[MarketDebtInfo],
+        config: Optional[RebalancingConfig] = None,
     ) -> Tuple[Decimal, Decimal]:
         """Get collateral and loan prices from market data.
+
+        For Morpho: Uses collateral_asset_price_usd from the market.
+        For Aave: Markets have MULTI collateral, so we look up the
+                  actual collateral price from another reserve.
 
         Returns: (collateral_price_usd, loan_price_usd)
 
         Raises:
             ValueError: If no valid price data is available
         """
-        # Get prices from first available market in cache
+        # Check if any markets use Aave MULTI collateral model
+        has_aave_markets = any(
+            m.collateral_address == "" or m.collateral_symbol == "MULTI"
+            for m in markets
+        )
+
+        # For Aave or cross-protocol with actual_collateral_asset specified
+        if has_aave_markets and config and config.actual_collateral_asset:
+            # For Aave: get loan price from current market, collateral price from separate lookup
+            loan_price_usd = Decimal("0")
+            for market in markets:
+                m = self._get_cached_market(market.market_id)
+                if m and m.loan_asset_price_usd > 0:
+                    loan_price_usd = m.loan_asset_price_usd
+                    break
+
+            if loan_price_usd <= 0:
+                raise ValueError("No valid loan price data for Aave market")
+
+            # Look up collateral price from Aave reserves
+            collateral_price_usd = self._lookup_aave_asset_price(config.actual_collateral_asset)
+            return (collateral_price_usd, loan_price_usd)
+
+        # Morpho: Get prices from first available market in cache
         for market in markets:
             m = self._get_cached_market(market.market_id)
             if m and m.collateral_asset_price_usd > 0 and m.loan_asset_price_usd > 0:
@@ -103,6 +131,75 @@ class DebtRebalancingOptimizer:
         raise ValueError(
             "No valid price data available. Ensure markets are cached with valid prices."
         )
+
+    def _lookup_aave_asset_price(self, asset_address: str) -> Decimal:
+        """Look up USD price for an Aave asset from cached reserves.
+
+        In Aave, each reserve (market) has the asset as loan_asset,
+        so we find the reserve matching the asset address.
+
+        Args:
+            asset_address: Token address to look up
+
+        Returns:
+            USD price of the asset
+
+        Raises:
+            ValueError: If price not found for the asset
+        """
+        asset_lower = asset_address.lower()
+
+        for market_id, (m, _) in self._market_cache.items():
+            if m.loan_asset.lower() == asset_lower and m.loan_asset_price_usd > 0:
+                return m.loan_asset_price_usd
+
+        raise ValueError(
+            f"Price not found for Aave asset {asset_address[:10]}... "
+            "Ensure all Aave reserves are cached before optimization."
+        )
+
+    def _derive_aave_collateral_symbol(self, asset_address: str) -> str:
+        """Derive collateral symbol for Aave from the asset address.
+
+        Looks up the symbol from cached reserves or returns shortened address.
+
+        Args:
+            asset_address: Token address
+
+        Returns:
+            Symbol string (e.g., "WETH") or shortened address
+        """
+        asset_lower = asset_address.lower()
+
+        # Look up symbol from cached reserves
+        for market_id, (m, _) in self._market_cache.items():
+            if m.loan_asset.lower() == asset_lower:
+                return m.loan_asset_symbol
+
+        # Fallback to shortened address
+        return f"{asset_address[:6]}...{asset_address[-4:]}"
+
+    async def _precache_aave_reserves(self, config: RebalancingConfig) -> None:
+        """Pre-cache all Aave reserves to enable collateral asset price lookup.
+
+        For Aave, we need to look up the collateral price from a separate reserve
+        since each market only shows the loan asset price. This fetches all
+        reserves and caches them for price lookup.
+
+        Args:
+            config: Rebalancing configuration with actual_collateral_asset
+        """
+        try:
+            # Fetch all Aave reserves (markets)
+            all_markets = await self.data.get_markets("aave", first=100)
+
+            for m in all_markets:
+                self._cache_market(m)
+
+            logger.info(f"Pre-cached {len(all_markets)} Aave reserves for price lookup")
+
+        except Exception as e:
+            logger.warning(f"Failed to pre-cache Aave reserves: {e}")
 
     async def optimize(
         self,
@@ -126,7 +223,12 @@ class DebtRebalancingOptimizer:
         start_time = datetime.now(timezone.utc)
 
         try:
-            # 1. Discover available markets
+            # 0. Pre-cache reserves for price lookups
+            # For Aave or cross-protocol: cache Aave reserves for collateral price lookup
+            if (config.is_aave or config.is_cross_protocol) and config.actual_collateral_asset:
+                await self._precache_aave_reserves(config)
+
+            # 1. Discover available markets (from one or both protocols)
             markets = await self._discover_markets(config)
             if not markets:
                 return RebalancingResult(
@@ -210,31 +312,58 @@ class DebtRebalancingOptimizer:
         Supports matching by:
         - Address (0x...): Exact match on collateral_asset and loan_asset addresses
         - Symbol: Substring match (less precise, may include unwanted tokens)
+
+        For Aave: Markets have collateral_asset="" and collateral_asset_symbol="MULTI"
+        because any enabled asset can serve as collateral. We match only on loan asset.
+
+        For Cross-Protocol: Fetches from both Morpho and Aave and combines results.
         """
-        # Get all markets
-        all_markets = await self.data.get_markets(config.protocol, first=500)
+        # Get markets from all configured protocols
+        all_markets = []
+        for protocol in config.protocols:
+            try:
+                protocol_markets = await self.data.get_markets(protocol, first=500)
+                all_markets.extend(protocol_markets)
+                logger.info(f"Fetched {len(protocol_markets)} markets from {protocol}")
+            except Exception as e:
+                logger.warning(f"Failed to fetch markets from {protocol}: {e}")
 
         # Filter by collateral/borrow pair
         matching_markets = []
 
         for m in all_markets:
-            # Check if config uses addresses (more precise)
-            if config.uses_address_matching:
-                # Exact address matching (case-insensitive)
-                collat_match = m.collateral_asset.lower() == config.collateral_asset.lower()
-                loan_match = m.loan_asset.lower() == config.borrow_asset.lower()
+            # Detect Aave MULTI collateral model
+            is_aave_market = m.collateral_asset == "" or m.collateral_asset_symbol == "MULTI"
+
+            if is_aave_market:
+                # Aave: Match only on loan asset (borrow asset)
+                # Any enabled asset can be used as collateral
+                if config.uses_address_matching:
+                    loan_match = m.loan_asset.lower() == config.borrow_asset.lower()
+                else:
+                    loan_match = config.borrow_asset.lower() in m.loan_asset_symbol.lower()
+
+                if loan_match:
+                    matching_markets.append(m)
             else:
-                # Symbol substring matching (fallback, less precise)
-                collat_match = config.collateral_asset.lower() in m.collateral_asset_symbol.lower()
-                loan_match = config.borrow_asset.lower() in m.loan_asset_symbol.lower()
+                # Morpho: Match both collateral AND loan asset
+                if config.uses_address_matching:
+                    # Exact address matching (case-insensitive)
+                    collat_match = m.collateral_asset.lower() == config.collateral_asset.lower()
+                    loan_match = m.loan_asset.lower() == config.borrow_asset.lower()
+                else:
+                    # Symbol substring matching (fallback, less precise)
+                    collat_match = config.collateral_asset.lower() in m.collateral_asset_symbol.lower()
+                    loan_match = config.borrow_asset.lower() in m.loan_asset_symbol.lower()
 
-            if collat_match and loan_match:
-                matching_markets.append(m)
+                if collat_match and loan_match:
+                    matching_markets.append(m)
 
+        protocols_str = "+".join(config.protocols) if config.is_cross_protocol else config.protocol
         logger.info(
             f"Found {len(matching_markets)} markets matching "
             f"{config.collateral_asset}/{config.borrow_asset} "
-            f"(address_match={config.uses_address_matching})"
+            f"(protocols={protocols_str}, address_match={config.uses_address_matching})"
         )
 
         # Filter by reasonable TVL, liquidity, and rates
@@ -374,11 +503,17 @@ class DebtRebalancingOptimizer:
             # Weights: 60% rate, 25% risk, 15% liquidity
             score = rate_score * Decimal("0.6") + risk_score * Decimal("0.25") + liquidity_score * Decimal("0.15")
 
+            # Determine protocol from market characteristics
+            # Aave markets have empty collateral_asset and MULTI symbol
+            is_aave_market = market.collateral_asset == "" or market.collateral_asset_symbol == "MULTI"
+            market_protocol = "aave" if is_aave_market else "morpho"
+
             info = MarketDebtInfo(
                 market_id=market.id,
                 market_name=market.name,
                 collateral_symbol=market.collateral_asset_symbol,
                 loan_symbol=market.loan_asset_symbol,
+                protocol=market_protocol,
                 collateral_address=market.collateral_asset,
                 loan_address=market.loan_asset,
                 borrow_apy=market.borrow_apy,
@@ -424,8 +559,8 @@ class DebtRebalancingOptimizer:
         allocation: Dict[str, Decimal] = {}
         positions: List[DebtPosition] = []
 
-        # Get real prices from market data
-        collateral_price_usd, loan_price_usd = self._get_collateral_price(markets)
+        # Get real prices from market data (pass config for Aave price lookup)
+        collateral_price_usd, loan_price_usd = self._get_collateral_price(markets, config)
 
         # Calculate collateral value in USD and borrow amount in loan tokens
         collateral_value_usd = config.collateral_amount * collateral_price_usd
@@ -614,8 +749,8 @@ class DebtRebalancingOptimizer:
         if not positions:
             return None
 
-        # Get real prices from market data
-        collateral_price_usd, loan_price_usd = self._get_collateral_price(markets)
+        # Get real prices from market data (pass config for Aave price lookup)
+        collateral_price_usd, loan_price_usd = self._get_collateral_price(markets, config)
 
         # Aggregate position data
         total_collateral = config.collateral_amount
@@ -643,6 +778,11 @@ class DebtRebalancingOptimizer:
                 if not collateral_symbol:
                     collateral_symbol = market.collateral_symbol
                     borrow_symbol = market.loan_symbol
+
+        # For Aave: derive collateral symbol from actual_collateral_asset
+        # since market.collateral_symbol would be "MULTI"
+        if collateral_symbol == "MULTI" and config.actual_collateral_asset:
+            collateral_symbol = self._derive_aave_collateral_symbol(config.actual_collateral_asset)
 
         if total_weight > 0:
             weighted_lltv /= total_weight
@@ -985,8 +1125,8 @@ class DebtRebalancingOptimizer:
         snapshots = []
         market_lookup = {m.market_id: m for m in markets}
 
-        # Get initial prices
-        collateral_price_usd, loan_price_usd = self._get_collateral_price(markets)
+        # Get initial prices (pass config for Aave price lookup)
+        collateral_price_usd, loan_price_usd = self._get_collateral_price(markets, config)
         initial_price = collateral_price_usd / loan_price_usd if loan_price_usd > 0 else collateral_price_usd
 
         # Start with optimal allocation
@@ -1337,8 +1477,8 @@ class DebtRebalancingOptimizer:
         """Simulate static allocation to lowest-rate market with dynamic prices."""
         snapshots = []
 
-        # Get initial prices
-        collateral_price_usd, loan_price_usd = self._get_collateral_price(markets)
+        # Get initial prices (pass config for Aave price lookup)
+        collateral_price_usd, loan_price_usd = self._get_collateral_price(markets, config)
         initial_price = collateral_price_usd / loan_price_usd if loan_price_usd > 0 else collateral_price_usd
 
         # Find market with lowest initial rate

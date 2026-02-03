@@ -7,6 +7,7 @@ from decimal import Decimal
 from typing import Dict, List, Optional, Any
 
 from src.data.pipeline import DataPipeline
+from src.data.clients.base import ProtocolType
 from src.core.models import Market, TimeseriesPoint
 
 logger = logging.getLogger(__name__)
@@ -99,7 +100,9 @@ class DataAggregator:
             return self._market_cache[cache_key]
 
         pipeline = self.get_pipeline(protocol)
-        market = await pipeline.get_market(market_id)
+        # Convert string protocol name to ProtocolType enum
+        protocol_type = ProtocolType(protocol.lower())
+        market = await pipeline.get_market(market_id, protocol=protocol_type)
 
         if market:
             self._market_cache[cache_key] = market
@@ -113,7 +116,9 @@ class DataAggregator:
     ) -> List[Market]:
         """Get all markets for a protocol."""
         pipeline = self.get_pipeline(protocol)
-        return await pipeline.get_markets(first=first)
+        # Convert string protocol name to ProtocolType enum
+        protocol_type = ProtocolType(protocol.lower())
+        return await pipeline.get_markets(protocol=protocol_type, first=first)
 
     async def get_market_timeseries(
         self,
@@ -135,9 +140,12 @@ class DataAggregator:
             List of TimeseriesPoint
         """
         pipeline = self.get_pipeline(protocol)
+        # Convert string protocol name to ProtocolType enum
+        protocol_type = ProtocolType(protocol.lower())
 
         return await pipeline.get_market_timeseries(
             market_id=market_id,
+            protocol=protocol_type,
             days=days,
             interval=interval,
         )

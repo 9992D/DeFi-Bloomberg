@@ -76,7 +76,12 @@ class AaveClient(ProtocolClient):
         first: int = 50,
         skip: int = 0,
     ) -> List[Market]:
-        """Fetch reserves from Aave v3 as Markets."""
+        """Fetch reserves from Aave v3 as Markets.
+
+        Note: The API returns multiple Aave markets (Core, Prime, Lido, etc.)
+        that may have overlapping reserves. We deduplicate by market ID to
+        avoid duplicate entries.
+        """
         try:
             result = await self._execute(
                 AaveQueries.MARKETS_QUERY,
@@ -84,6 +89,8 @@ class AaveClient(ProtocolClient):
             )
 
             markets = []
+            seen_ids: set[str] = set()
+
             for market_data in result.get("markets", []):
                 market_name = market_data.get("name", "")
                 chain_info = market_data.get("chain", {}) or {}
@@ -99,6 +106,12 @@ class AaveClient(ProtocolClient):
                         market = self._parser.parse_reserve_to_market(
                             reserve, market_name, chain_id
                         )
+
+                        # Deduplicate by market ID (same token may appear in multiple Aave markets)
+                        if market.id in seen_ids:
+                            continue
+                        seen_ids.add(market.id)
+
                         markets.append(market)
                     except Exception as e:
                         symbol = reserve.get("underlyingToken", {}).get("symbol", "unknown")

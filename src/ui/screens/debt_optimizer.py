@@ -29,11 +29,18 @@ from src.sandbox.engine.debt_optimizer import DebtRebalancingOptimizer
 from src.sandbox.models.rebalancing import RebalancingConfig, RebalancingMode, RebalancingResult, PositionSummary
 from src.core.models import Market
 from src.protocols.morpho.assets import (
-    COLLATERAL_ASSETS,
-    BORROW_ASSETS,
-    DEFAULT_COLLATERAL_ADDRESS,
-    DEFAULT_BORROW_ADDRESS,
-    get_asset_name,
+    COLLATERAL_ASSETS as MORPHO_COLLATERAL,
+    BORROW_ASSETS as MORPHO_BORROW,
+    DEFAULT_COLLATERAL_ADDRESS as MORPHO_DEFAULT_COLLAT,
+    DEFAULT_BORROW_ADDRESS as MORPHO_DEFAULT_BORROW,
+    get_asset_name as get_morpho_asset_name,
+)
+from src.protocols.aave.assets import (
+    COLLATERAL_ASSETS as AAVE_COLLATERAL,
+    BORROW_ASSETS as AAVE_BORROW,
+    DEFAULT_COLLATERAL_ADDRESS as AAVE_DEFAULT_COLLAT,
+    DEFAULT_BORROW_ADDRESS as AAVE_DEFAULT_BORROW,
+    get_asset_name as get_aave_asset_name,
 )
 
 logger = logging.getLogger(__name__)
@@ -44,6 +51,13 @@ REBALANCING_MODES = [
     ("Static Threshold", "static_threshold"),
     ("Predictive (IRM)", "predictive"),
     ("Opportunity Cost", "opportunity_cost"),
+]
+
+# Available protocols
+PROTOCOLS = [
+    ("Morpho Blue", "morpho"),
+    ("Aave v3", "aave"),
+    ("Cross-Protocol (Morpho + Aave)", "cross"),
 ]
 
 
@@ -228,11 +242,22 @@ class DebtOptimizerScreen(Widget):
         super().__init__(*args, **kwargs)
         self.pipeline = pipeline
         self.settings = settings
-        self.aggregator = DataAggregator(pipelines={"morpho": pipeline})
+        # Initialize DataAggregator with both protocols using the same pipeline
+        self.aggregator = DataAggregator(pipelines={
+            "morpho": pipeline,
+            "aave": pipeline,
+        })
         self.optimizer = DebtRebalancingOptimizer(self.aggregator)
 
         self._current_result: Optional[RebalancingResult] = None
         self._initialized = False
+        self._current_protocol = "morpho"
+
+        # Track current asset lists based on protocol
+        self._collateral_assets = MORPHO_COLLATERAL
+        self._borrow_assets = MORPHO_BORROW
+        self._default_collateral = MORPHO_DEFAULT_COLLAT
+        self._default_borrow = MORPHO_DEFAULT_BORROW
 
     def compose(self) -> ComposeResult:
         with Vertical(id="debt-optimizer-main"):
@@ -240,20 +265,30 @@ class DebtOptimizerScreen(Widget):
             with Container(id="debt-config-panel"):
                 yield Static("Debt Rebalancing Optimizer", id="debt-config-title")
 
+                # Protocol selection row
+                with Horizontal(classes="debt-config-row"):
+                    with Horizontal(classes="debt-param-group"):
+                        yield Label("Protocol:", classes="debt-config-label")
+                        yield Select(
+                            PROTOCOLS,
+                            value="morpho",
+                            id="protocol-select",
+                        )
+
                 # Asset selection row
                 with Horizontal(classes="debt-config-row"):
                     with Horizontal(classes="debt-param-group"):
                         yield Label("Collateral:", classes="debt-config-label")
                         yield Select(
-                            COLLATERAL_ASSETS,
-                            value=DEFAULT_COLLATERAL_ADDRESS,
+                            self._collateral_assets,
+                            value=self._default_collateral,
                             id="collateral-select",
                         )
                     with Horizontal(classes="debt-param-group"):
                         yield Label("Borrow:", classes="debt-config-label")
                         yield Select(
-                            BORROW_ASSETS,
-                            value=DEFAULT_BORROW_ADDRESS,
+                            self._borrow_assets,
+                            value=self._default_borrow,
                             id="borrow-select",
                         )
 
@@ -397,6 +432,69 @@ class DebtOptimizerScreen(Widget):
         if event.input.id in ("collateral-input", "ltv-input"):
             self._update_borrow_calc()
 
+    async def on_select_changed(self, event: Select.Changed) -> None:
+        """Handle select widget changes."""
+        if event.select.id == "protocol-select":
+            await self._update_protocol_assets(str(event.value))
+
+    async def _update_protocol_assets(self, protocol: str) -> None:
+        """Update asset options when protocol changes."""
+        self._current_protocol = protocol
+
+        if protocol == "aave":
+            self._collateral_assets = AAVE_COLLATERAL
+            self._borrow_assets = AAVE_BORROW
+            self._default_collateral = AAVE_DEFAULT_COLLAT
+            self._default_borrow = AAVE_DEFAULT_BORROW
+        elif protocol == "cross":
+            # Cross-protocol: Use combined assets (Morpho base + Aave extras)
+            # Combine unique assets from both protocols
+            self._collateral_assets = self._merge_assets(MORPHO_COLLATERAL, AAVE_COLLATERAL)
+            self._borrow_assets = self._merge_assets(MORPHO_BORROW, AAVE_BORROW)
+            self._default_collateral = MORPHO_DEFAULT_COLLAT
+            self._default_borrow = MORPHO_DEFAULT_BORROW
+        else:
+            self._collateral_assets = MORPHO_COLLATERAL
+            self._borrow_assets = MORPHO_BORROW
+            self._default_collateral = MORPHO_DEFAULT_COLLAT
+            self._default_borrow = MORPHO_DEFAULT_BORROW
+
+        # Update the Select widgets with new options
+        try:
+            collateral_select = self.query_one("#collateral-select", Select)
+            borrow_select = self.query_one("#borrow-select", Select)
+
+            # Clear and set new options
+            collateral_select.set_options(self._collateral_assets)
+            collateral_select.value = self._default_collateral
+
+            borrow_select.set_options(self._borrow_assets)
+            borrow_select.value = self._default_borrow
+
+            protocol_name = "Cross-Protocol" if protocol == "cross" else protocol.title()
+            self._update_status(f"Switched to {protocol_name}")
+        except Exception as e:
+            logger.warning(f"Error updating asset selects: {e}")
+
+    def _merge_assets(self, list1: list, list2: list) -> list:
+        """Merge two asset lists, keeping unique addresses."""
+        seen_addresses = set()
+        merged = []
+
+        for name, addr in list1:
+            addr_lower = addr.lower()
+            if addr_lower not in seen_addresses:
+                seen_addresses.add(addr_lower)
+                merged.append((name, addr))
+
+        for name, addr in list2:
+            addr_lower = addr.lower()
+            if addr_lower not in seen_addresses and addr != "custom":
+                seen_addresses.add(addr_lower)
+                merged.append((name, addr))
+
+        return merged
+
     def _update_status(self, message: str) -> None:
         """Update status line."""
         self.status_message = message
@@ -425,6 +523,7 @@ class DebtOptimizerScreen(Widget):
 
         try:
             # Get config values
+            protocol_select = self.query_one("#protocol-select", Select)
             collateral_select = self.query_one("#collateral-select", Select)
             borrow_select = self.query_one("#borrow-select", Select)
             collateral_input = self.query_one("#collateral-input", Input)
@@ -437,7 +536,8 @@ class DebtOptimizerScreen(Widget):
             min_hf_input = self.query_one("#min-hf-input", Input)
             gas_input = self.query_one("#gas-input", Input)
 
-            # Get selected addresses (not symbols)
+            # Get selected protocol and addresses
+            protocol = str(protocol_select.value)
             collateral_addr = str(collateral_select.value)
             borrow_addr = str(borrow_select.value)
 
@@ -454,11 +554,17 @@ class DebtOptimizerScreen(Widget):
             ltv_pct = Decimal(ltv_input.value or "70")
             initial_ltv = ltv_pct / 100
 
+            # For Aave and Cross-protocol: actual_collateral_asset is the collateral address
+            # (since Aave markets show MULTI as collateral)
+            actual_collateral = collateral_addr if protocol in ("aave", "cross") else ""
+
             config = RebalancingConfig(
                 collateral_asset=collateral_addr,
                 borrow_asset=borrow_addr,
+                actual_collateral_asset=actual_collateral,
                 collateral_amount=Decimal(collateral_input.value or "100"),
                 initial_ltv=initial_ltv,
+                protocol=protocol,
                 rebalancing_mode=rebalancing_mode,
                 rate_threshold_bps=Decimal(threshold_input.value or "10"),
                 min_allocation_pct=Decimal(min_alloc_input.value or "5") / 100,
@@ -469,11 +575,16 @@ class DebtOptimizerScreen(Widget):
             )
 
             # Get display names for status
-            collateral_name = get_asset_name(collateral_addr, COLLATERAL_ASSETS)
-            borrow_name = get_asset_name(borrow_addr, BORROW_ASSETS)
+            collateral_name = get_morpho_asset_name(collateral_addr, MORPHO_COLLATERAL)
+            borrow_name = get_morpho_asset_name(borrow_addr, MORPHO_BORROW)
+
+            if protocol == "cross":
+                protocol_label = "Cross-Protocol"
+            else:
+                protocol_label = protocol.title()
 
             self._update_status(
-                f"Finding {collateral_name}/{borrow_name} markets (by address)..."
+                f"[{protocol_label}] Finding {collateral_name}/{borrow_name} markets..."
             )
 
             result = await self.optimizer.optimize(config)
@@ -509,7 +620,7 @@ class DebtOptimizerScreen(Widget):
     def _update_position_summary(self, result: RebalancingResult) -> None:
         """Update position summary table with USD values."""
         table = self.query_one("#position-summary-table", DataTable)
-        table.clear()
+        table.clear(columns=True)
         table.add_columns("Category", "Metric", "Value")
 
         summary = result.position_summary
@@ -552,7 +663,7 @@ class DebtOptimizerScreen(Widget):
     def _update_price_scenarios(self, result: RebalancingResult) -> None:
         """Update price scenarios table."""
         table = self.query_one("#price-scenarios-table", DataTable)
-        table.clear()
+        table.clear(columns=True)
         table.add_columns("Price Chg", "Price", "HF", "LTV", "Dist to Liq", "Status")
 
         summary = result.position_summary
@@ -581,39 +692,77 @@ class DebtOptimizerScreen(Widget):
     def _update_markets_table(self, result: RebalancingResult) -> None:
         """Update markets table with results and USD values."""
         table = self.query_one("#markets-table", DataTable)
-        table.clear()
-        table.add_columns("Market", "APY", "LLTV", "Util", "Liquidity", "Score")
+        # Clear both rows AND columns to avoid duplicates
+        table.clear(columns=True)
+
+        # Check if cross-protocol to show protocol column
+        is_cross = result.config.is_cross_protocol
+        if is_cross:
+            table.add_columns("Proto", "Market", "APY", "LLTV", "Util", "Score")
+        else:
+            table.add_columns("Market", "APY", "LLTV", "Util", "Liquidity", "Score")
 
         for market in result.available_markets[:10]:  # Top 10
-            table.add_row(
-                market.market_name[:16],
-                f"{float(market.borrow_apy)*100:.2f}%",
-                f"{float(market.lltv)*100:.0f}%",
-                f"{float(market.utilization)*100:.0f}%",
-                f"${float(market.available_liquidity)/1e6:.1f}M",
-                f"{float(market.score):.1f}",
-            )
+            # Protocol indicator: M=Morpho, A=Aave
+            proto = "A" if market.protocol == "aave" else "M"
+
+            if is_cross:
+                table.add_row(
+                    proto,
+                    market.market_name[:14],
+                    f"{float(market.borrow_apy)*100:.2f}%",
+                    f"{float(market.lltv)*100:.0f}%",
+                    f"{float(market.utilization)*100:.0f}%",
+                    f"{float(market.score):.1f}",
+                )
+            else:
+                table.add_row(
+                    market.market_name[:16],
+                    f"{float(market.borrow_apy)*100:.2f}%",
+                    f"{float(market.lltv)*100:.0f}%",
+                    f"{float(market.utilization)*100:.0f}%",
+                    f"${float(market.available_liquidity)/1e6:.1f}M",
+                    f"{float(market.score):.1f}",
+                )
 
         # Add optimal allocation section with USD values
         if result.optimal_positions:
-            table.add_row("", "", "", "", "", "")
-            table.add_row("OPTIMAL ALLOCATION", "", "", "", "", "")
+            if is_cross:
+                table.add_row("", "", "", "", "", "")
+                table.add_row("", "OPTIMAL ALLOCATION", "", "", "", "")
+            else:
+                table.add_row("", "", "", "", "", "")
+                table.add_row("OPTIMAL ALLOCATION", "", "", "", "", "")
+
             for pos in result.optimal_positions:
                 # Format borrow amount with commas for large USD values
                 borrow_display = f"${float(pos.borrow_amount):,.0f}" if float(pos.borrow_amount) > 100 else f"{float(pos.borrow_amount):.2f}"
-                table.add_row(
-                    f"  {pos.market_name[:14]}",
-                    f"{float(pos.borrow_apy)*100:.2f}%",
-                    f"{float(pos.allocation_weight)*100:.0f}%",
-                    borrow_display,
-                    f"HF:{float(pos.health_factor):.2f}",
-                    f"Liq:{float(pos.liquidation_price):,.0f}",
-                )
+                if is_cross:
+                    # Find market to get protocol
+                    market = next((m for m in result.available_markets if m.market_id == pos.market_id), None)
+                    proto = "A" if (market and market.protocol == "aave") else "M"
+                    table.add_row(
+                        proto,
+                        f"{pos.market_name[:12]}",
+                        f"{float(pos.borrow_apy)*100:.2f}%",
+                        f"{float(pos.allocation_weight)*100:.0f}%",
+                        borrow_display,
+                        f"HF:{float(pos.health_factor):.2f}",
+                    )
+                else:
+                    table.add_row(
+                        f"  {pos.market_name[:14]}",
+                        f"{float(pos.borrow_apy)*100:.2f}%",
+                        f"{float(pos.allocation_weight)*100:.0f}%",
+                        borrow_display,
+                        f"HF:{float(pos.health_factor):.2f}",
+                        f"Liq:{float(pos.liquidation_price):,.0f}",
+                    )
 
     def _update_opportunities_table(self, result: RebalancingResult) -> None:
         """Update opportunities table."""
         table = self.query_one("#opportunities-table", DataTable)
-        table.clear()
+        table.clear(columns=True)
         table.add_columns("From", "To", "Rate Diff", "Savings/mo", "Breakeven", "Net 30d")
 
         if not result.opportunities:
@@ -640,7 +789,7 @@ class DebtOptimizerScreen(Widget):
     def _update_metrics_table(self, result: RebalancingResult) -> None:
         """Update metrics table."""
         table = self.query_one("#metrics-panel", DataTable)
-        table.clear()
+        table.clear(columns=True)
         table.add_columns("Metric", "Strategy", "Benchmark", "Diff")
 
         if not result.metrics:
